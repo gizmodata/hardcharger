@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <duckdb/catalog/catalog.hpp>
+#include <duckdb/parser/constraints/check_constraint.hpp>
 #include <duckdb/catalog/catalog_entry_retriever.hpp>
 #include <duckdb/catalog/dependency_manager.hpp>
 #include <duckdb/catalog/catalog_search_path.hpp>
@@ -66,6 +67,7 @@
 #include "authz/duckdb_internal.hpp"
 #include "authz/ducklake_calls.hpp"
 #include "authz/macros.hpp"
+#include "authz/name_scope.hpp"
 #include "logging.hpp"
 #include "authz/policies.hpp"
 #include "authz/resolver.hpp"
@@ -396,6 +398,38 @@ bool ChangesWholeServer(dd::ClientContext& context, const dd::Identifier& name,
 // view only), view inside view, each against its own owner. A view without a
 // valid owner record reads with the caller's rights, in addition to the
 // rights of any view it sits in.
+// CREATE INDEX: an index's expressions are kept as written and bound again, under their
+// table's name scope, when the index is first needed after a start (name_scope.hpp). Why the
+// functions and types they name would then not be what they are in this session; "" if they are.
+std::string IndexStoredNamesProblem(dd::ClientContext& context, dd::LogicalCreateIndex& index) {
+  if (!index.info) return "";
+  const ObjectPath table = PathOfEntry(index.table);
+  std::vector<const dd::ParsedExpression*> expressions;
+  for (const auto& expression : index.info->parsed_expressions) expressions.push_back(expression.get());
+  for (const auto& expression : index.info->expressions) expressions.push_back(expression.get());
+  return StoredNamesProblem(context, table.catalog, table.schema_path,
+                            "an index on table " + table.ToString(), nullptr, expressions);
+}
+
+// ALTER TABLE ... ADD COLUMN (a generated one, or one with a CHECK) and ADD CONSTRAINT CHECK:
+// the macros they call given their schema, as CREATE TABLE does (QualifyTableExpressions).
+void QualifyAlterExpressions(dd::ClientContext& context, const std::string& catalog, dd::AlterInfo& info) {
+  auto& table_info = info.Cast<dd::AlterTableInfo>();
+  if (table_info.alter_table_type == dd::AlterTableType::ADD_COLUMN) {
+    auto& column = table_info.Cast<dd::AddColumnInfo>().new_column;
+    if (column.Generated()) {
+      auto copy = column.GeneratedExpression().Copy();
+      QualifyTableExpression(context, catalog, copy);
+      column.SetGeneratedExpression(std::move(copy));
+    }
+  } else if (table_info.alter_table_type == dd::AlterTableType::ADD_CONSTRAINT) {
+    auto& constraint = table_info.Cast<dd::AddConstraintInfo>().constraint;
+    if (constraint && constraint->type == dd::ConstraintType::CHECK) {
+      QualifyTableExpression(context, catalog, constraint->Cast<dd::CheckConstraint>().expression);
+    }
+  }
+}
+
 class PlanChecker {
  public:
   using ViewColumns = std::unordered_map<const ViewMarker*, std::vector<std::string>>;
@@ -409,20 +443,54 @@ class PlanChecker {
         trigger_bodies_(trigger_bodies),
         rights_{Rights{principal, ""}} {}
 
+  // The carried columns (triggers.hpp) a base write's scan was not asked SELECT for,
+  // because the rights it was checked with lack it: somebody must answer for them where
+  // the base's rows are read (RequireCarriedRows). Shared by a checker and the checkers
+  // it makes for trigger bodies. A base's scan is checked before its rows' readers (a
+  // CTE's definition comes before its scope); `read` refuses a waiver that would come
+  // after one all the same.
+  struct CarriedRows {
+    std::map<const dd::LogicalOperator*, std::vector<std::string>> waived;  // by the base's write
+    std::set<const dd::LogicalOperator*> read;
+  };
+  std::shared_ptr<CarriedRows> carried_rows_ = std::make_shared<CarriedRows>();
+  // The trigger body being checked, innermost (nullptr: the statement itself).
+  const TriggerBody* current_body_ = nullptr;
+
   // Checking a trigger's body with its owner's rights: prefixed to every refusal.
   std::string trigger_context_;
   // Set by CheckAsDefiner for the one Visit of the body's root, so the root is checked
   // here rather than handed to yet another checker.
   bool trigger_body_entered_ = false;
+  // The names in the trigger bodies a statement fires are held against the writer's
+  // session (triggers.hpp, "Names in a body"). For an administrator's own statement, only in
+  // the bodies of users' triggers (CheckDefinerBodies) and beneath them.
+  bool check_trigger_names_ = true;
 
   void Visit(dd::LogicalOperator& op,
              dd::optional_ptr<dd::TableCatalogEntry> dml_target = nullptr) {
     // A trigger's body, bound into the statement that fires it (triggers.hpp): checked with
     // its owner's rights when a user owns the trigger, refused outright when its owner is
     // gone or the trigger can't be told, else with the writer's, as DuckDB runs it.
+    struct RestoreBody {
+      const TriggerBody*& slot;
+      const TriggerBody* saved;
+      ~RestoreBody() { slot = saved; }
+    } restore_body{current_body_, current_body_};
     if (const TriggerBody* body = TriggerBodyAt(trigger_bodies_, op); body && !body->base) {
       if (!body->problem.empty()) Deny(principal_, body->problem);
+      // Whoever made the trigger and whoever's rights its body runs with: every name in it
+      // must be, in this session, what it is for the trigger's own table.
+      if (check_trigger_names_ && !trigger_body_entered_) {
+        const std::string names = TriggerBodyNameProblem(context_, trigger_bodies_, *body);
+        if (!names.empty()) ::hardcharger::authz::Deny(principal_, names);
+      }
       if (body->definer && !trigger_body_entered_) return CheckAsDefiner(*body, op);
+      current_body_ = body;
+      // A row trigger's body reads the rows its statement changes (OLD, NEW).
+      if (body->reads_rows_of) {
+        if (const TriggerBody* base = TriggerBodyAt(trigger_bodies_, *body->reads_rows_of)) RequireCarriedRows(*base);
+      }
       dml_target = nullptr;
     }
     trigger_body_entered_ = false;
@@ -528,6 +596,17 @@ class PlanChecker {
           }
         }
         CheckCreate(*create.info->base, ObjectType::kTable, Privilege::kCreateTable);
+        // The macros its CHECK constraints, generated columns and defaults call, given their
+        // schema; then every name in them is what its table's name scope will find.
+        if (const auto parts = PartsOf(*create.info->base); !parts.empty()) {
+          QualifyTableExpressions(context_, parts[0], create.info->Base());
+          if (parts.size() >= 3) {
+            const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()};
+            if (auto problem = TableStoredNamesProblem(context_, table, create.info->Base()); !problem.empty()) {
+              Deny(principal_, problem);
+            }
+          }
+        }
         VisitChildren(op, nullptr);  // CREATE TABLE AS reads its source
         return;
       }
@@ -551,6 +630,8 @@ class PlanChecker {
         auto& index = op.Cast<dd::LogicalCreateIndex>();
         if (!IsTempCatalog(compat::Str(index.table.ParentCatalog().GetName()))) {
           Require(index.table, Privilege::kAlterTable, {});
+          if (index.info) QualifyIndexExpressions(context_, compat::Str(index.table.ParentCatalog().GetName()), *index.info);
+          if (auto problem = IndexStoredNamesProblem(context_, index); !problem.empty()) Deny(principal_, problem);
         }
         VisitChildren(op, nullptr);
         return;
@@ -743,7 +824,6 @@ class PlanChecker {
       case OpType::LOGICAL_EXPRESSION_GET:
       case OpType::LOGICAL_DUMMY_SCAN:
       case OpType::LOGICAL_EMPTY_RESULT:
-      case OpType::LOGICAL_CTE_REF:
       case OpType::LOGICAL_JOIN:
       case OpType::LOGICAL_DELIM_JOIN:
       case OpType::LOGICAL_COMPARISON_JOIN:
@@ -768,6 +848,14 @@ class PlanChecker {
 
       case OpType::LOGICAL_MATERIALIZED_CTE:
       case OpType::LOGICAL_TRIGGER:
+        VisitChildren(op, dml_target);
+        return;
+
+      case OpType::LOGICAL_CTE_REF:
+        // A CTE's rows were checked where its definition read them, with one exception:
+        // the rows a write hands its triggers (a transition table), whose carried columns
+        // the writer was not asked SELECT for. Somebody answers for those here.
+        if (const TriggerBody* base = BaseReadBy(trigger_bodies_, op)) RequireCarriedRows(*base);
         VisitChildren(op, dml_target);
         return;
 
@@ -946,9 +1034,56 @@ class PlanChecker {
       const auto& column = table->GetColumn(dd::LogicalIndex(index.GetPrimaryIndex()));
       columns.push_back(compat::Str(column.Name()));
     }
-    // The row-locating scan under the statement's own UPDATE / DELETE target
-    // needs no SELECT unless it reads columns (in WHERE or SET), as in Postgres.
-    if (columns.empty() && dml_target && table.get() == dml_target.get()) return;
+    if (dml_target && table.get() == dml_target.get()) {
+      // The row-locating scan under the statement's own UPDATE / DELETE target
+      // needs no SELECT unless it reads columns (in WHERE or SET), as in Postgres.
+      if (columns.empty()) return;
+      // On a table with triggers the binder makes that scan read every column, to hand the
+      // triggers their rows (triggers.hpp, "Carried columns"). A writer who holds SELECT on
+      // all of them is checked as ever, below. One who does not still needs SELECT on what
+      // the statement itself reads; the carried columns it lacks go to nothing but the
+      // write operator, and whoever reads the rows after it answers for them
+      // (RequireCarriedRows).
+      if (const TriggerBody* base = BaseScannedBy(trigger_bodies_, get)) {
+        std::vector<std::string> lacking;
+        for (const auto& column : base->carried_columns) {
+          if (!HoldsSelect(PathOf(*table), ObjectTypeOf(*table), column)) lacking.push_back(column);
+        }
+        if (!lacking.empty()) {
+          if (!base->read_columns.empty()) {
+            // Say why when it is a key's, an index's or a CHECK's column the writer lacks.
+            for (const auto& column : base->told_columns) {
+              if (!HoldsSelect(PathOf(*table), ObjectTypeOf(*table), column)) {
+                carried_note_ =
+                    " (the table has triggers: a write to it that reads no column needs no SELECT, except on the "
+                    "columns of its keys and indexes, and an UPDATE's on those of a CHECK over several columns or "
+                    "one that calls more than DuckDB's own functions, whose errors can tell their values)";
+                break;
+              }
+            }
+            Require(*table, Privilege::kSelect, base->read_columns);
+            carried_note_.clear();
+          }
+          // Never after a reader of these rows was let through (in every plan DuckDB
+          // makes the scan is checked first): then the columns are the writer's to hold.
+          if (carried_rows_->read.count(base->root)) Require(*table, Privilege::kSelect, lacking);
+          carried_rows_->waived[base->root] = std::move(lacking);
+          return;
+        }
+      } else if (BaseWriting(trigger_bodies_, (*table))) {
+        // A table with triggers whose write's columns could not be told apart: every column
+        // the scan reads is a read, as before. Say why.
+        carried_note_ = (*table).HasGeneratedColumns()
+                            ? " (the table has triggers and generated columns: a write to it computes the generated "
+                              "columns from the rows it changes, which takes SELECT on the table)"
+                            : " (the table has triggers, and this statement's plan is not one in which the columns "
+                              "only the triggers need can be told apart from the ones it reads: that takes SELECT on "
+                              "them)";
+        Require(*table, Privilege::kSelect, columns);
+        carried_note_.clear();
+        return;
+      }
+    }
     // DuckLake's own read of a table it is compacting or flushing (CheckDuckLakeRewrite): part
     // of the maintenance MAINTAIN ON CATALOG allows, which hands back counts, not rows. Only a
     // table of the catalog being rewritten, and only under DuckLake's own operator.
@@ -957,6 +1092,61 @@ class PlanChecker {
       return;
     }
     Require(*table, Privilege::kSelect, columns);
+  }
+
+  // Would Require(SELECT on `column`) pass, for every one whose rights are in force?
+  bool HoldsSelect(const ObjectPath& path, ObjectType type, const std::string& column) {
+    if (!snapshot_.CatalogVisible(principal_, path.catalog)) return false;
+    if (IsTempCatalog(path.catalog)) {
+      if (in_owned_view_) return false;
+      if (!principal_.catalog_rules) return true;
+    }
+    const AccessRequest request{path, type, Privilege::kSelect, {column}};
+    for (const auto& rights : rights_) {
+      if (!snapshot_.Check(rights.principal, request).allowed) return false;
+    }
+    return true;
+  }
+
+  // The rows a base write hands its triggers are read here (a transition table, OLD and
+  // NEW), by the trigger body being checked or by the statement itself. For the carried
+  // columns the write's scan was let off, somebody answers (triggers.hpp, "Who answers
+  // for a row reader"): the administrator who made the trigger (nothing is asked), the
+  // trigger's owner (SELECT, with the owner's rights: the ones in force in its body), or
+  // else the writer, who is the one that lacks them. The first two only for a trigger of
+  // the written table itself. (Its body does what its maker wrote: the names in it were
+  // held against this session where the body was entered.)
+  void RequireCarriedRows(const TriggerBody& base) {
+    carried_rows_->read.insert(base.root);
+    auto waived = carried_rows_->waived.find(base.root);
+    if (waived == carried_rows_->waived.end()) return;
+    const TriggerBody* reader = current_body_;
+    const bool of_this_table =
+        reader && !reader->base && IdentifiersEqual(reader->table.catalog, base.table.catalog) &&
+        reader->table.schema_path.size() == base.table.schema_path.size() &&
+        std::equal(reader->table.schema_path.begin(), reader->table.schema_path.end(), base.table.schema_path.begin(),
+                   [](const std::string& a, const std::string& b) { return IdentifiersEqual(a, b); }) &&
+        IdentifiersEqual(reader->table.object_name, base.table.object_name);
+    if (of_this_table && reader->administrators) return;  // an administrator's trigger vouches for these reads
+    if (of_this_table && reader->definer) {
+      carried_note_ = " (the trigger's body reads the rows the statement changes: that takes SELECT on them, the "
+                      "writer's or else the trigger owner's)";
+      RequireObject(base.table, ObjectType::kTable, Privilege::kSelect, waived->second);
+      carried_note_.clear();
+      return;
+    }
+    carried_note_ = reader && !reader->base
+                        ? " (" + reader->describe +
+                              " reads the rows the statement changes, and nobody is on record as having made it "
+                              "under access control: that takes the writer's SELECT on them)"
+                        : " (the statement reads the rows it changes)";
+    RequireObject(base.table, ObjectType::kTable, Privilege::kSelect, waived->second);
+    carried_note_.clear();
+    // The rights in force here hold what the write's scan was let off for lacking: they
+    // are not the writer's, then (no plan DuckDB makes reads a statement's rows in the
+    // body of another table's trigger). Nobody answers for the rows.
+    ::hardcharger::authz::Deny(principal_, "the rows the statement on table " + base.table.ToString() +
+                                               " changes are read where nobody answers for them; ask an administrator");
   }
 
   ObjectPath PathOf(dd::CatalogEntry& entry) { return PathOfEntry(entry); }
@@ -1123,6 +1313,7 @@ class PlanChecker {
         what += " (read through the view " + unowned_view_ +
                 ", which has no owner, so it reads with your rights)";
       }
+      what += carried_note_;
       Deny(principal_, what);
     }
   }
@@ -1477,6 +1668,9 @@ class PlanChecker {
       Deny(principal_, "user " + principal_.user_name + " has no " + PrivilegeName(privilege) +
                            " privilege on " + where);
     }
+    if (type == ObjectType::kTable || type == ObjectType::kView) {
+      if (auto refusal = TriggerNameRefusal(context_, target)) Deny(principal_, *refusal);
+    }
     ownership_.push_back({PendingOwnership::Kind::kCreate, target, type, {}, false, {}, !existing});
     return true;
   }
@@ -1604,6 +1798,11 @@ class PlanChecker {
     if (existing && info.on_conflict == dd::OnCreateConflict::REPLACE_ON_CONFLICT) {
       RequireTriggerDrop(table_path, trigger.object_name, "replace");
     }
+    // The trigger is stored with the names in its action given their schema, as this session
+    // resolves them, and its owner record is of that definition.
+    if (auto problem = QualifyTriggerNames(context_, table_path, info); !problem.empty()) Deny(principal_, problem);
+    // And the functions and types it calls are what its table's name scope will find.
+    if (auto problem = TriggerStoredNamesProblem(context_, table_path, info); !problem.empty()) Deny(principal_, problem);
     ownership_.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table_path, trigger.object_name),
                           ObjectType::kTrigger, TriggerDefinitionHash(info)});
   }
@@ -1634,6 +1833,8 @@ class PlanChecker {
     checker.trigger_context_ = body.describe + " cannot run, because its owner " + body.definer_name +
                                " may not do what its body does: ";
     checker.trigger_body_entered_ = true;
+    checker.check_trigger_names_ = check_trigger_names_;
+    checker.carried_rows_ = carried_rows_;
     checker.Visit(plan);
     for (auto& access : checker.accesses_) accesses_.insert(access);
     for (auto& object : checker.objects_) objects_.push_back(std::move(object));
@@ -1779,6 +1980,17 @@ class PlanChecker {
     search_path.emplace_back(catalog.GetName(), schema.name);
     search_path.emplace_back(catalog.GetName(), dd::Identifier(INVALID_SCHEMA), true);
     binder->EntryRetriever().SetSearchPath(std::move(search_path));
+    // And the view's name scope (name_scope.hpp): what its functions and types will be for
+    // every reader. Bound that way here, so a name the scope does not find is said now.
+    if (!info.temporary && !IsTempCatalog(compat::Str(catalog.GetName()))) {
+      binder->EntryRetriever().SetNameScope(NameScopeIn(schema, "view", compat::Str(info.GetViewName())));
+      ObjectPath in = PathOfEntry(schema);
+      const std::string what = "view " + in.ToString() + "." + QuoteIdentifierIfNeeded(compat::Str(info.GetViewName()));
+      if (auto problem = StoredNamesProblem(context_, in.catalog, in.schema_path, what, info.query->node.get(), {});
+          !problem.empty()) {
+        Deny(principal_, problem);
+      }
+    }
     auto copy = info.query->Copy();
     auto bound = binder->Bind(*copy);
     if (!bound.plan) Deny(principal_, "the new view's query could not be checked");
@@ -2319,6 +2531,7 @@ class PlanChecker {
     // A default that names a sequence (a temporary table's too): USAGE on it. (DuckDB
     // binds ADD COLUMN ... DEFAULT nextval() with a NULL default and fills the column with
     // an UPDATE, which is checked when it runs; SET DEFAULT is checked here.)
+    if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context_, parts[0], info);
     if (info.type == dd::AlterType::ALTER_TABLE) {
       auto& table_info = info.Cast<dd::AlterTableInfo>();
       if (table_info.alter_table_type == dd::AlterTableType::ADD_COLUMN) {
@@ -2358,6 +2571,19 @@ class PlanChecker {
         Deny(principal_, "user " + principal_.user_name + " may not alter " + TypeWord(type) + " " +
                              path.ToString() + " (only its owner, or a role granted " +
                              PrivilegeName(request.privilege) + ")");
+      }
+      std::string renamed;
+      if (info.type == dd::AlterType::ALTER_TABLE &&
+          info.Cast<dd::AlterTableInfo>().alter_table_type == dd::AlterTableType::RENAME_TABLE) {
+        renamed = compat::Str(info.Cast<dd::RenameTableInfo>().new_table_name);
+      } else if (info.type == dd::AlterType::ALTER_VIEW &&
+                 info.Cast<dd::AlterViewInfo>().alter_view_type == dd::AlterViewType::RENAME_VIEW) {
+        renamed = compat::Str(info.Cast<dd::RenameViewInfo>().new_view_name);
+      }
+      if (!renamed.empty() && !IdentifiersEqual(renamed, path.object_name)) {
+        ObjectPath destination = path;
+        destination.object_name = renamed;
+        if (auto refusal = TriggerNameRefusal(context_, destination)) Deny(principal_, *refusal);
       }
       return;
     }
@@ -2454,6 +2680,7 @@ class PlanChecker {
   std::string owned_view_;    // the innermost view read with its owner's rights
   std::string unowned_view_;  // the innermost view read with the caller's rights
   std::string creating_view_;  // checking this new view's query (CheckViewQuery)
+  std::string carried_note_;   // added to a refusal of RequireCarriedRows
   std::vector<PendingOwnership> ownership_;
   std::set<std::string> accesses_;
   boost::json::array objects_;
@@ -2467,11 +2694,17 @@ void CheckDefinerBodies(dd::ClientContext& context, const Snapshot& snapshot, dd
   if (const TriggerBody* body = TriggerBodyAt(bodies, op)) {
     if (!body->problem.empty()) ::hardcharger::authz::Deny(Principal::Superuser("administrator"), body->problem);
     if (body->definer) {
+      // The administrator's session must not decide what a user's trigger names either: the
+      // body runs with its owner's rights, and would read the administrator's temporary
+      // objects (or WITH) into the owner's tables. The same for the bodies beneath it.
+      const std::string names = TriggerBodyNameProblem(context, bodies, *body);
+      if (!names.empty()) ::hardcharger::authz::Deny(Principal::Superuser("administrator"), names);
       const auto view_columns = ViewColumnsUsed(op);
       PlanChecker checker(context, snapshot, *body->definer, view_columns, bodies);
       checker.trigger_context_ = body->describe + " cannot run, because its owner " + body->definer_name +
                                  " may not do what its body does: ";
       checker.trigger_body_entered_ = true;
+      checker.check_trigger_names_ = true;
       checker.Visit(op);
       return;
     }
@@ -2562,10 +2795,52 @@ void CollectRename(dd::ClientContext& context, dd::LogicalOperator& op,
   for (auto& child : op.children) if (child) CollectRename(context, *child, changes);
 }
 
+// CREATE TRIGGER outside any session (the init SQL): its action's names written in full.
+// Never a reason for the statement to fail: what can't be resolved stays as written, and
+// is held against each writer's session when the trigger fires.
+void QualifyUncheckedTriggers(dd::ClientContext& context, dd::LogicalOperator& op) {
+  try {
+    if (op.type == OpType::LOGICAL_CREATE_TABLE) {
+      auto& create = op.Cast<dd::LogicalCreateTable>();
+      if (const auto parts = PartsOf(*create.info->base); !parts.empty()) {
+        QualifyTableExpressions(context, parts[0], create.info->Base());
+      }
+    } else if (op.type == OpType::LOGICAL_ALTER) {
+      auto& info = *op.Cast<dd::LogicalAlter>().info;
+      const auto parts = PartsOf(info);
+      if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context, parts[0], info);
+    } else if (op.type == OpType::LOGICAL_CREATE_INDEX) {
+      auto& index = op.Cast<dd::LogicalCreateIndex>();
+      if (index.info) QualifyIndexExpressions(context, compat::Str(index.table.ParentCatalog().GetName()), *index.info);
+    }
+  } catch (const std::exception&) {
+  }
+  if (op.type == OpType::LOGICAL_CREATE_TRIGGER) {
+    try {
+      auto& info = op.Cast<dd::LogicalCreate>().info->Cast<dd::CreateTriggerInfo>();
+      const auto parts = PartsOf(info);
+      if (parts.size() >= 3 && !IsTempCatalog(parts[0]) && !info.temporary && info.base_table) {
+        const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1},
+                               compat::Str(info.base_table->GetQualifiedName().Name())};
+        QualifyTriggerNames(context, table, info);
+      }
+    } catch (const std::exception&) {
+    }
+  }
+  for (auto& child : op.children) {
+    if (child) QualifyUncheckedTriggers(context, *child);
+  }
+}
+
 void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalOperator>& plan) {
   auto& context = input.context;
   auto state = context.registered_state->Get<RbacSessionState>(kRbacSessionStateName);
-  if (!state) return;  // a Hardcharger-internal connection
+  if (!state) {
+    // A Hardcharger-internal connection: nothing to check. The init SQL's DuckDB statements
+    // run on one: a trigger they create is stored with its names in full, as a session's is.
+    if (plan) QualifyUncheckedTriggers(context, *plan);
+    return;
+  }
   auto engine = state->engine();
   if (!engine) {
     throw dd::PermissionException(
@@ -2579,10 +2854,37 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
     if (plan && !state->bypassed()) {
       // Record superuser-created objects as system-owned so a stale record of a
       // user's earlier object of the same name can never apply to them.
+      // An index that could not be bound to one macro beyond doubt is nobody's to read or write
+      // through, an administrator's statement included (triggers.hpp, IndexExpressionProblem).
+      if (auto problem = StatementIndexProblem(context, *plan); !problem.empty()) {
+        ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+      }
       std::function<void(dd::LogicalOperator&)> collect = [&](dd::LogicalOperator& op) {
+        if (op.type == OpType::LOGICAL_ALTER) {
+          auto& info = *op.Cast<dd::LogicalAlter>().info;
+          const auto parts = PartsOf(info);
+          if (info.type == dd::AlterType::ALTER_TABLE && !parts.empty()) QualifyAlterExpressions(context, parts[0], info);
+        }
+        if (op.type == OpType::LOGICAL_CREATE_INDEX) {
+          auto& index = op.Cast<dd::LogicalCreateIndex>();
+          if (!IsTempCatalog(compat::Str(index.table.ParentCatalog().GetName()))) {
+            if (index.info) QualifyIndexExpressions(context, compat::Str(index.table.ParentCatalog().GetName()), *index.info);
+            if (auto problem = IndexStoredNamesProblem(context, index); !problem.empty()) {
+              ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+            }
+          }
+        }
         if (op.type == OpType::LOGICAL_CREATE_TABLE) {
           auto parts = PartsOf(*op.Cast<dd::LogicalCreateTable>().info->base);
           auto& info = *op.Cast<dd::LogicalCreateTable>().info->base;
+          if (!parts.empty()) QualifyTableExpressions(context, parts[0], op.Cast<dd::LogicalCreateTable>().info->Base());
+          if (parts.size() >= 3) {
+            const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()};
+            if (auto problem = TableStoredNamesProblem(context, table, op.Cast<dd::LogicalCreateTable>().info->Base());
+                !problem.empty()) {
+              ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+            }
+          }
           auto existing = LookUp(context, dd::CatalogType::TABLE_ENTRY, parts);
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) &&
               !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
@@ -2596,6 +2898,17 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
           auto existing = LookUp(context, dd::CatalogType::TABLE_ENTRY, parts);
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) &&
               !(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
+            // An administrator's view too finds its functions and types under its name scope when
+            // it is read: say now what its query names that the scope would not find.
+            const ObjectPath view{parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()};
+            auto& view_info = info.Cast<dd::CreateViewInfo>();
+            if (!view_info.temporary && view_info.query && view_info.query->node) {
+              if (auto problem = StoredNamesProblem(context, view.catalog, view.schema_path, "view " + view.ToString(),
+                                                    view_info.query->node.get(), {});
+                  !problem.empty()) {
+                ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+              }
+            }
             ownership.push_back({PendingOwnership::Kind::kCreate,
                                  {parts[0], {parts.begin() + 1, parts.end() - 1}, parts.back()},
                                  ObjectType::kView, DefinitionHashOf(info), false, {}, !existing});
@@ -2639,8 +2952,26 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
           if (parts.size() >= 3 && !IsTempCatalog(parts[0]) && !info.temporary && info.base_table) {
             const ObjectPath table{parts[0], {parts.begin() + 1, parts.end() - 1},
                                    compat::Str(info.base_table->GetQualifiedName().Name())};
-            ownership.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table, parts.back()),
-                                 ObjectType::kTrigger, TriggerDefinitionHash(info)});
+            // IF NOT EXISTS over a trigger that is there changes nothing: DuckDB keeps it, and
+            // its owner record (a user's trigger stays the user's, run with the user's rights).
+            dd::optional_ptr<dd::CatalogEntry> existing;
+            std::vector<std::string> table_parts(parts.begin(), parts.end() - 1);
+            table_parts.push_back(table.object_name);
+            if (auto entry = LookUp(context, dd::CatalogType::TABLE_ENTRY, table_parts);
+                entry && entry->type == dd::CatalogType::TABLE_ENTRY) {
+              existing = LookUpTrigger(context, entry->Cast<dd::TableCatalogEntry>(), parts.back());
+            }
+            if (!(existing && info.on_conflict == dd::OnCreateConflict::IGNORE_ON_CONFLICT)) {
+              // Stored with its names given their schema, as a user's is.
+              if (auto problem = QualifyTriggerNames(context, table, info); !problem.empty()) {
+                ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+              }
+              if (auto problem = TriggerStoredNamesProblem(context, table, info); !problem.empty()) {
+                ::hardcharger::authz::Deny(Principal::Superuser("administrator"), problem);
+              }
+              ownership.push_back({PendingOwnership::Kind::kCreate, TriggerOwnerPath(table, parts.back()),
+                                   ObjectType::kTrigger, TriggerDefinitionHash(info)});
+            }
           }
         }
         for (auto& child : op.children) {
@@ -2678,6 +3009,10 @@ void PreOptimize(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalO
   const auto trigger_bodies = FindTriggerBodies(context, *snapshot, *plan);
   PlanChecker checker(context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*plan);
+  // The indexes of what it reads and writes are bound (again, after a start) while it runs.
+  if (auto problem = StatementIndexProblem(context, *plan); !problem.empty()) {
+    ::hardcharger::authz::Deny(principal, problem);
+  }
   RemoveViewMarkers(plan);
   // The external policy service may refuse what passed.
   if (const auto* service = engine->policy_service()) {
@@ -2738,6 +3073,9 @@ void PostBind(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
   const auto trigger_bodies = FindTriggerBodies(input.context, *snapshot, *statement.plan);
   PlanChecker checker(input.context, *snapshot, principal, view_columns, trigger_bodies);
   checker.Visit(*statement.plan);
+  if (auto problem = StatementIndexProblem(input.context, *statement.plan); !problem.empty()) {
+    ::hardcharger::authz::Deny(principal, problem);
+  }
   state->NoteBindChecked();
 }
 
@@ -3164,6 +3502,7 @@ std::optional<SystemPrivilege> SystemPrivilegeForGatedCategory(const std::string
 
 void RegisterRbacEnforcement(dd::DBConfig& config) {
   InstallViewHook();
+  InstallNameScopeHook();
   dd::OptimizerExtension extension;
   extension.pre_optimize_function = PreOptimize;
   dd::OptimizerExtension::Register(config, std::move(extension));

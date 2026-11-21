@@ -4,22 +4,73 @@
 #include <duckdb/catalog/catalog_entry/table_catalog_entry.hpp>
 #include <duckdb/common/enums/trigger_type.hpp>
 #include <duckdb/main/client_context.hpp>
+#include <duckdb/main/attached_database.hpp>
+#include <duckdb/main/database_manager.hpp>
+#include <duckdb/catalog/catalog_entry/index_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry/macro_catalog_entry.hpp>
+#include <duckdb/parser/parsed_data/create_index_info.hpp>
+#include <duckdb/storage/data_table.hpp>
+#include <duckdb/catalog/catalog_entry/schema_catalog_entry.hpp>
+#include <duckdb/catalog/catalog_entry/sequence_catalog_entry.hpp>
+#include <duckdb/function/scalar_macro_function.hpp>
+#include <duckdb/function/table_macro_function.hpp>
+#include <duckdb/parser/query_node/merge_query_node.hpp>
+#include <duckdb/parser/statement/merge_into_statement.hpp>
+#include <duckdb/parser/query_node/recursive_cte_node.hpp>
+#include <duckdb/parser/query_node/select_node.hpp>
+#include <duckdb/parser/query_node/set_operation_node.hpp>
+#include <duckdb/parser/tableref/expressionlistref.hpp>
+#include <duckdb/parser/tableref/joinref.hpp>
+#include <duckdb/parser/tableref/pivotref.hpp>
+#include <duckdb/parser/tableref/showref.hpp>
+#include <duckdb/planner/operator/logical_cte.hpp>
+#include <duckdb/catalog/catalog_entry_retriever.hpp>
+#include <duckdb/function/scalar/sequence_utils.hpp>
+#include <duckdb/parser/expression/constant_expression.hpp>
+#include <duckdb/parser/expression/function_expression.hpp>
+#include <duckdb/parser/expression/subquery_expression.hpp>
+#include <duckdb/parser/parsed_expression_iterator.hpp>
 #include <duckdb/parser/query_node/delete_query_node.hpp>
 #include <duckdb/parser/query_node/insert_query_node.hpp>
 #include <duckdb/parser/query_node/update_query_node.hpp>
+#include <duckdb/parser/statement/select_statement.hpp>
 #include <duckdb/parser/tableref/basetableref.hpp>
+#include <duckdb/parser/tableref/subqueryref.hpp>
+#include <duckdb/parser/tableref/table_function_ref.hpp>
+#include <duckdb/planner/binder.hpp>
+#include <duckdb/planner/expression/bound_function_expression.hpp>
+#include <duckdb/planner/expression_iterator.hpp>
+#include <duckdb/planner/logical_operator_visitor.hpp>
 #include <duckdb/planner/operator/logical_delete.hpp>
 #include <duckdb/planner/operator/logical_insert.hpp>
 #include <duckdb/planner/operator/logical_materialized_cte.hpp>
 #include <duckdb/planner/operator/logical_merge_into.hpp>
 #include <duckdb/planner/operator/logical_update.hpp>
+#include <duckdb/planner/constraints/bound_check_constraint.hpp>
+#include <duckdb/parser/constraints/check_constraint.hpp>
+#include <duckdb/parser/expression/cast_expression.hpp>
+#include <duckdb/parser/expression/type_expression.hpp>
+#include <duckdb/catalog/catalog_entry/view_catalog_entry.hpp>
 #include <duckdb/planner/expression/bound_columnref_expression.hpp>
+#include <duckdb/planner/expression_iterator.hpp>
+#include <duckdb/planner/logical_operator_visitor.hpp>
+#include <duckdb/planner/operator/logical_cteref.hpp>
+#include <duckdb/planner/operator/logical_dependent_join.hpp>
 #include <duckdb/planner/operator/logical_get.hpp>
+#include <algorithm>
+#include <duckdb/planner/operator/logical_recursive_cte.hpp>
+#include <duckdb/planner/operator/logical_trigger.hpp>
+#include <duckdb/storage/table_storage_info.hpp>
 #include <functional>
 #include <map>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/name_scope.hpp"
 #include "authz/resolver.hpp"
+#include "authz/views.hpp"
 
 namespace hardcharger::authz {
 
@@ -40,6 +91,7 @@ struct TriggerBase {
   dd::TriggerEventType event = dd::TriggerEventType::INSERT_EVENT;
   std::vector<std::string> updated_columns;
   const dd::LogicalOperator* dml = nullptr;
+  const dd::LogicalOperator* cte = nullptr;  // the base CTE itself
   bool returning_to_user = false;
   std::string problem;
 };
@@ -217,7 +269,10 @@ bool IsBodyCte(const std::string& name) {
 
 void CollectBases(const dd::LogicalOperator& op, std::map<std::string, TriggerBase>& bases, bool in_body) {
   const std::string name = CteName(op);
-  if (auto uuid = After(name, kBasePrefix)) bases[*uuid] = BaseOf(op, in_body);
+  if (auto uuid = After(name, kBasePrefix)) {
+    bases[*uuid] = BaseOf(op, in_body);
+    bases[*uuid].cte = &op;
+  }
   for (size_t i = 0; i < op.children.size(); ++i) {
     // A body CTE's definition (its first child) is the body.
     if (op.children[i]) CollectBases(*op.children[i], bases, in_body || (i == 0 && IsBodyCte(name)));
@@ -286,22 +341,32 @@ dd::optional_ptr<dd::CatalogEntry> ActionTarget(dd::ClientContext& context, cons
 
 TriggerBody BodyOf(const Snapshot& snapshot, const dd::TriggerCatalogEntry& trigger, dd::TableCatalogEntry& table) {
   TriggerBody body;
+  body.entries.push_back(&trigger);
   body.table = PathOfEntry(table);
   body.trigger = TriggerOwnerPath(body.table, compat::Str(trigger.name));
   body.describe = "trigger " + QuoteIdentifierIfNeeded(body.trigger.object_name) + " on table " + body.table.ToString();
   const OwnerRecord* owner = snapshot.FindTriggerOwner(body.trigger);
-  if (!owner || owner->type != ObjectType::kTrigger || owner->owner_kind == OwnerKind::kSystem) return body;
+  if (!owner || owner->type != ObjectType::kTrigger) return body;
+  // Is the record of the trigger as it is now?
+  auto of_this_definition = [&]() {
+    try {
+      const std::string current = TriggerDefinitionHash(trigger);
+      return !current.empty() && current == owner->definition_hash;
+    } catch (...) {
+      return false;
+    }
+  };
+  if (owner->owner_kind == OwnerKind::kSystem) {
+    // An administrator's: it runs with the writer's rights, and vouches for its reads of
+    // the firing statement's rows when the record is of this very definition (one changed
+    // since outside access control is nobody's to vouch for). No record of the definition
+    // (written before there were any): not vouched.
+    body.administrators = !owner->definition_hash.empty() && of_this_definition();
+    return body;
+  }
   // A record of an earlier trigger of this name (dropped, and the name reused by an
   // administrator or the init SQL) must not apply: the definition must match.
-  if (!owner->definition_hash.empty()) {
-    std::string current;
-    try {
-      current = TriggerDefinitionHash(trigger);
-    } catch (...) {
-      current.clear();
-    }
-    if (current != owner->definition_hash) return body;
-  }
+  if (!owner->definition_hash.empty() && !of_this_definition()) return body;
   switch (owner->owner_kind) {
     case OwnerKind::kUser: {
       const UserRecord* user = snapshot.FindUserById(owner->owner_id);
@@ -343,10 +408,16 @@ class Finder {
 
   TriggerBodies bodies;
   std::map<std::string, TriggerBase> bases;
+  // The CTE the row triggers of a base are bound under (by the base's uuid), and which of
+  // `bodies` are those row triggers' bodies (by the base's write).
+  std::map<std::string, const dd::LogicalOperator*> row_ctes;
+  std::map<const dd::LogicalOperator*, std::vector<size_t>> row_bodies;
 
   void Walk(const dd::LogicalOperator& op) {
     const std::string name = CteName(op);
     if (auto rest = After(name, kRowBodyPrefix)) {
+      // Two CTEs of one name: neither is taken for the place the row triggers sit.
+      row_ctes[*rest] = row_ctes.count(*rest) ? nullptr : &op;
       if (!op.children.empty() && op.children[0]) RowBodies(*op.children[0], *rest);
       if (op.children.size() > 1 && op.children[1]) Walk(*op.children[1]);
       return;
@@ -415,10 +486,13 @@ class Finder {
     for (auto& trigger : base->table->GetTriggersForEvent(txn, base->event, dd::TriggerForEach::ROW)) {
       candidates.push_back({&trigger.get(), ActionTarget(context_, trigger.get()).get()});
     }
-    MatchRowBodies(plan, *base, candidates);
+    MatchRowBodies(plan, *base, candidates, nullptr);
   }
 
-  void MatchRowBodies(const dd::LogicalOperator& op, const TriggerBase& base, const std::vector<Candidate>& candidates) {
+  // `action_top`: the outermost CTE of the action's own WITH above `op`, if any. The body is
+  // from there: the WITH's definitions are the body's, checked with its rights and names.
+  void MatchRowBodies(const dd::LogicalOperator& op, const TriggerBase& base, const std::vector<Candidate>& candidates,
+                      const dd::LogicalOperator* action_top) {
     const std::string name = CteName(op);
     if (auto nested = After(name, kBasePrefix)) {
       // The body writes a table that has statement triggers of its own: the binder put
@@ -429,11 +503,11 @@ class Finder {
       std::vector<const dd::LogicalOperator*> beside;
       if (op.children.size() > 1 && op.children[1]) CollectWrites(*op.children[1], beside);
       if (chain == bases.end() || !chain->second.problem.empty() || !chain->second.table || !beside.empty()) {
-        bodies.push_back(Unmatched(op, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
+        AddRowBody(base, Unmatched(op, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
                                            " could not be matched to its body; ask an administrator"));
         return;
       }
-      RowBody(op, *chain->second.table, base, candidates);
+      RowBody(action_top ? *action_top : op, *chain->second.table, base, candidates);
       for (const auto& child : op.children) {
         if (child) Walk(*child);
       }
@@ -441,16 +515,30 @@ class Finder {
     }
     if (After(name, "__duckdb_trigger_")) {
       // Any other CTE of a chain has its place beneath a base CTE, never here.
-      bodies.push_back(Unmatched(op, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
+      AddRowBody(base, Unmatched(op, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
                                          " could not be matched to its body; ask an administrator"));
       return;
     }
     if (dd::TableCatalogEntry* written = WrittenTable(op)) {
-      RowBody(op, *written, base, candidates);
+      RowBody(action_top ? *action_top : op, *written, base, candidates);
       return;  // a body is one DML: nothing of another trigger sits beneath it
     }
+    if (op.type == OpType::LOGICAL_MATERIALIZED_CTE && op.children.size() == 2 && !action_top &&
+        FoldIdentifier(name).rfind("__duckdb_", 0) != 0) {
+      // A WITH of the action's own (DuckDB binds it above the action's INSERT, UPDATE or
+      // DELETE): the body starts here. Its definition holds no DML (DuckDB refuses a
+      // data-modifying WITH below the top level), so the write is beneath its scope.
+      if (op.children[1]) MatchRowBodies(*op.children[1], base, candidates, &op);
+      std::vector<const dd::LogicalOperator*> writes;
+      if (op.children[0]) CollectWrites(*op.children[0], writes);
+      if (!writes.empty()) {
+        AddRowBody(base, Unmatched(op, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
+                                           " could not be matched to its body; ask an administrator"));
+      }
+      return;
+    }
     for (const auto& child : op.children) {
-      if (child) MatchRowBodies(*child, base, candidates);
+      if (child) MatchRowBodies(*child, base, candidates, action_top);
     }
   }
 
@@ -462,17 +550,19 @@ class Finder {
       if (candidate.target && candidate.target == &written) matching.push_back(candidate.trigger);
     }
     if (matching.empty()) {
-      bodies.push_back(Unmatched(root, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
+      AddRowBody(base, Unmatched(root, "a row trigger of table " + PathOfEntry(*base.table).ToString() +
                                            " could not be matched to its body; ask an administrator"));
       return;
     }
     TriggerBody body = BodyOf(snapshot_, *matching[0], *base.table);
     for (size_t i = 1; i < matching.size(); ++i) {
       TriggerBody other = BodyOf(snapshot_, *matching[i], *base.table);
+      body.entries.push_back(matching[i]);
       const bool same_owner = other.definer.has_value() == body.definer.has_value() &&
                               (!body.definer || (other.definer->user_id == body.definer->user_id &&
                                                  other.definer->role_id == body.definer->role_id)) &&
                               other.problem == body.problem;
+      body.administrators = body.administrators && other.administrators;
       if (!same_owner) {
         body.problem = "the row triggers " + QuoteIdentifierIfNeeded(body.trigger.object_name) + " and " +
                        QuoteIdentifierIfNeeded(other.trigger.object_name) + " on table " + body.table.ToString() +
@@ -481,12 +571,1214 @@ class Finder {
       }
     }
     body.root = &root;
+    AddRowBody(base, std::move(body));
+  }
+
+  void AddRowBody(const TriggerBase& base, TriggerBody body) {
+    row_bodies[base.dml].push_back(bodies.size());
     bodies.push_back(std::move(body));
   }
 
   dd::ClientContext& context_;
   const Snapshot& snapshot_;
 };
+
+
+// ---- Names in a body (triggers.hpp) ----
+
+// A table, view or sequence a parsed trigger action (or a macro it calls) names, as written,
+// and where: so that CREATE TRIGGER can write its schema there.
+struct WrittenName {
+  std::vector<std::string> parts;
+  bool sequence = false;
+  bool written_to = false;  // what an INSERT, UPDATE or DELETE writes: never a CTE's name
+  // A bare name in the scope of a CTE of that name (or of a transition table): DuckDB binds it
+  // to that, not to a table.
+  bool cte = false;
+  dd::BaseTableRef* ref = nullptr;
+  dd::InsertQueryNode* insert = nullptr;
+  dd::unique_ptr<dd::ParsedExpression>* constant = nullptr;  // nextval('...'), query_table('...')
+};
+
+// A function a parsed action calls by name (a macro, if it is one, is looked into).
+struct CalledFunction {
+  std::vector<std::string> parts;
+  bool table = false;  // FROM f(...): a table function or a table macro
+  dd::FunctionExpression* call = nullptr;  // where it stands, so CREATE TRIGGER can write its schema there
+};
+
+bool IsSequenceFunctionName(const std::string& name) {
+  return name == "nextval" || name == "currval" || name == "setval";
+}
+
+// Every table, view and sequence a parsed action names, in subqueries, CTEs, set operations
+// and joins too, each with whether a CTE of its name is in scope where it stands (DuckDB's
+// binder: a node's CTEs are seen by its body and by the CTEs defined after them in the same
+// WITH, never by their own definition, which looks further out; a recursive CTE sees
+// itself), and the functions it calls. Throws on SQL it cannot read to the end.
+class ActionNames {
+ public:
+  // `outer`: the CTE names in scope around the whole action (a trigger's transition tables).
+  explicit ActionNames(std::set<std::string> outer = {}) : outer_(std::move(outer)) {}
+
+  std::vector<WrittenName> names;
+  std::vector<CalledFunction> functions;
+  // The types its casts name (nested ones too), as written: found by name where it is bound.
+  std::vector<std::vector<std::string>> types;
+  // A sequence function whose sequence is not a plain string, or a query_table() / query()
+  // whose table is not one: what it names can't be read.
+  bool unreadable_sequence = false;
+  bool unreadable_table = false;
+
+  void Node(dd::QueryNode& node) { Node(node, outer_); }
+  // The names in one expression (a column's default, a scalar macro's body).
+  void Expression(dd::unique_ptr<dd::ParsedExpression>& expression) {
+    if (expression) Expression(expression, outer_);
+  }
+
+ private:
+  using Scope = std::set<std::string>;  // folded names of the CTEs in scope
+
+  void Enter() {
+    if (++depth_ > 200) throw dd::InternalException("a trigger's action is nested too deeply to read");
+  }
+
+  static std::vector<std::string> Parts(const dd::QualifiedName& name) {
+    std::vector<std::string> parts;
+    for (const auto& part : name.Path()) {
+      if (!compat::Str(part).empty()) parts.push_back(compat::Str(part));
+    }
+    return parts;
+  }
+
+  void Expressions(dd::vector<dd::unique_ptr<dd::ParsedExpression>>& list, const Scope& scope) {
+    for (auto& expression : list) {
+      if (expression) Expression(expression, scope);
+    }
+  }
+
+  void Node(dd::QueryNode& node, const Scope& outer) {
+    Enter();
+    Scope scope = outer;
+    for (auto& entry : node.cte_map.map) {
+      // A CTE's definition sees the ones before it, not itself.
+      if (entry.second && entry.second->query_node) Node(*entry.second->query_node, scope);
+      scope.insert(FoldIdentifier(compat::Str(entry.first)));
+    }
+    switch (node.type) {
+      case dd::QueryNodeType::SELECT_NODE: {
+        auto& select = node.Cast<dd::SelectNode>();
+        Expressions(select.select_list, scope);
+        Expressions(select.groups.group_expressions, scope);
+        if (select.where_clause) Expression(select.where_clause, scope);
+        if (select.having) Expression(select.having, scope);
+        if (select.qualify) Expression(select.qualify, scope);
+        if (select.from_table) Ref(*select.from_table, scope, false);
+        break;
+      }
+      case dd::QueryNodeType::SET_OPERATION_NODE:
+        for (auto& child : node.Cast<dd::SetOperationNode>().children) {
+          if (child) Node(*child, scope);
+        }
+        break;
+      case dd::QueryNodeType::RECURSIVE_CTE_NODE: {
+        auto& recursive = node.Cast<dd::RecursiveCTENode>();
+        Scope inner = scope;
+        inner.insert(FoldIdentifier(compat::Str(recursive.ctename)));
+        if (recursive.left) Node(*recursive.left, inner);
+        if (recursive.right) Node(*recursive.right, inner);
+        Expressions(recursive.key_targets, inner);
+        break;
+      }
+      case dd::QueryNodeType::INSERT_QUERY_NODE: {
+        auto& insert = node.Cast<dd::InsertQueryNode>();
+        WrittenName name;
+        name.parts = Parts(insert.qualified_name);
+        name.written_to = true;
+        name.insert = &insert;
+        if (!name.parts.empty()) names.push_back(std::move(name));
+        if (insert.select_statement && insert.select_statement->node) Node(*insert.select_statement->node, scope);
+        if (insert.table_ref) Ref(*insert.table_ref, scope, true);
+        Expressions(insert.returning_list, scope);
+        if (insert.on_conflict_info) {
+          if (insert.on_conflict_info->set_info) {
+            Expressions(insert.on_conflict_info->set_info->expressions, scope);
+            if (insert.on_conflict_info->set_info->condition) Expression(insert.on_conflict_info->set_info->condition, scope);
+          }
+          if (insert.on_conflict_info->condition) Expression(insert.on_conflict_info->condition, scope);
+        }
+        break;
+      }
+      case dd::QueryNodeType::UPDATE_QUERY_NODE: {
+        auto& update = node.Cast<dd::UpdateQueryNode>();
+        if (update.table) Ref(*update.table, scope, true);
+        if (update.from_table) Ref(*update.from_table, scope, false);
+        if (update.set_info) {
+          Expressions(update.set_info->expressions, scope);
+          if (update.set_info->condition) Expression(update.set_info->condition, scope);
+        }
+        Expressions(update.returning_list, scope);
+        break;
+      }
+      case dd::QueryNodeType::DELETE_QUERY_NODE: {
+        auto& del = node.Cast<dd::DeleteQueryNode>();
+        if (del.table) Ref(*del.table, scope, true);
+        for (auto& from : del.using_clauses) {
+          if (from) Ref(*from, scope, false);
+        }
+        if (del.condition) Expression(del.condition, scope);
+        Expressions(del.returning_list, scope);
+        break;
+      }
+      case dd::QueryNodeType::MERGE_QUERY_NODE: {
+        auto& merge = node.Cast<dd::MergeQueryNode>();
+        if (merge.target) Ref(*merge.target, scope, true);
+        if (merge.source) Ref(*merge.source, scope, false);
+        if (merge.join_condition) Expression(merge.join_condition, scope);
+        for (auto& entry : merge.actions) {
+          for (auto& action : entry.second) {
+            if (!action) continue;
+            if (action->condition) Expression(action->condition, scope);
+            if (action->update_info) {
+              Expressions(action->update_info->expressions, scope);
+              if (action->update_info->condition) Expression(action->update_info->condition, scope);
+            }
+            Expressions(action->expressions, scope);
+          }
+        }
+        Expressions(merge.returning_list, scope);
+        break;
+      }
+      default:
+        throw dd::InternalException("a trigger's action holds a kind of query this can't read");
+    }
+    dd::ParsedExpressionIterator::EnumerateQueryNodeModifiers(
+        node, [&](dd::unique_ptr<dd::ParsedExpression>& child) {
+          if (child) Expression(child, scope);
+        });
+    --depth_;
+  }
+
+  void Ref(dd::TableRef& ref, const Scope& scope, bool written) {
+    Enter();
+    switch (ref.type) {
+      case dd::TableReferenceType::BASE_TABLE: {
+        WrittenName name;
+        name.ref = &ref.Cast<dd::BaseTableRef>();
+        name.parts = Parts(name.ref->GetQualifiedName());
+        name.written_to = written;
+        name.cte = !written && name.parts.size() == 1 && scope.count(FoldIdentifier(name.parts[0])) > 0;
+        if (!name.parts.empty()) names.push_back(std::move(name));
+        break;
+      }
+      case dd::TableReferenceType::JOIN: {
+        auto& join = ref.Cast<dd::JoinRef>();
+        if (join.left) Ref(*join.left, scope, false);
+        if (join.right) Ref(*join.right, scope, false);
+        if (join.condition) Expression(join.condition, scope);
+        break;
+      }
+      case dd::TableReferenceType::SUBQUERY: {
+        auto& subquery = ref.Cast<dd::SubqueryRef>().subquery;
+        if (subquery && subquery->node) Node(*subquery->node, scope);
+        break;
+      }
+      case dd::TableReferenceType::TABLE_FUNCTION: {
+        auto& function = ref.Cast<dd::TableFunctionRef>();
+        if (function.function && function.function->GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
+          TableFunction(function.function->Cast<dd::FunctionExpression>(), scope);
+        }
+        if (function.function) Expression(function.function, scope, /*table_function=*/true);
+        if (function.subquery && function.subquery->node) Node(*function.subquery->node, scope);
+        break;
+      }
+      case dd::TableReferenceType::EXPRESSION_LIST:
+        for (auto& row : ref.Cast<dd::ExpressionListRef>().values) Expressions(row, scope);
+        break;
+      case dd::TableReferenceType::PIVOT: {
+        auto& pivot = ref.Cast<dd::PivotRef>();
+        if (pivot.source) Ref(*pivot.source, scope, false);
+        Expressions(pivot.aggregates, scope);
+        for (auto& column : pivot.pivots) {
+          Expressions(column.pivot_expressions, scope);
+          for (auto& entry : column.entries) {
+            if (entry.expr) Expression(entry.expr, scope);
+          }
+          if (column.subquery) Node(*column.subquery, scope);
+        }
+        break;
+      }
+      case dd::TableReferenceType::SHOW_REF: {
+        auto& show = ref.Cast<dd::ShowRef>();
+        if (show.query) Node(*show.query, scope);
+        break;
+      }
+      case dd::TableReferenceType::EMPTY_FROM:
+      case dd::TableReferenceType::COLUMN_DATA:
+      case dd::TableReferenceType::DELIM_GET:
+        break;
+      default:
+        throw dd::InternalException("a trigger's action holds a kind of table reference this can't read");
+    }
+    --depth_;
+  }
+
+  // FROM f(...): the function, and for query_table('t') the table it names.
+  void TableFunction(dd::FunctionExpression& function, const Scope& scope) {
+    CalledFunction called;
+    called.parts = Parts(function.GetQualifiedName());
+    called.table = true;
+    called.call = &function;
+    if (called.parts.empty()) return;
+    const std::string name = FoldIdentifier(called.parts.back());
+    if (called.parts.size() == 1 && (name == "query_table" || name == "query")) {
+      // query_table('t') binds the table t by name where it is called; query('...') any SQL.
+      dd::unique_ptr<dd::ParsedExpression>* first = nullptr;
+      size_t arguments = 0;
+      for (auto& argument : function.GetArgumentsMutable()) {
+        ++arguments;
+        if (!first && !argument.HasName()) first = &argument.GetExpressionMutable();
+      }
+      WrittenName table;
+      if (name == "query_table" && arguments == 1 && first && *first &&
+          (*first)->GetExpressionClass() == dd::ExpressionClass::CONSTANT) {
+        const auto value = compat::ConstantValue((*first)->Cast<dd::ConstantExpression>());
+        if (!value.IsNull() && value.type().id() == dd::LogicalTypeId::VARCHAR) {
+          for (const auto& part : dd::QualifiedName::ParseComponents(value.ToString())) {
+            table.parts.push_back(compat::Str(part));
+          }
+          table.constant = first;
+          // DuckDB binds the name where the call stands: a CTE of that name in scope is meant.
+          table.cte = table.parts.size() == 1 && scope.count(FoldIdentifier(table.parts[0])) > 0;
+        }
+      }
+      if (table.parts.empty()) {
+        unreadable_table = true;
+      } else {
+        names.push_back(std::move(table));
+      }
+      return;
+    }
+    functions.push_back(std::move(called));
+  }
+
+  void Type(const dd::ParsedExpression& expression, int depth) {
+    if (depth > 50 || expression.GetExpressionClass() != dd::ExpressionClass::TYPE) return;
+    auto& type = expression.Cast<dd::TypeExpression>();
+    std::vector<std::string> parts;
+    for (const auto& part : {type.GetCatalog(), type.GetSchema(), type.GetTypeName()}) {
+      if (!compat::Str(part).empty()) parts.push_back(compat::Str(part));
+    }
+    if (!parts.empty()) types.push_back(std::move(parts));
+    for (const auto& child : type.GetChildren()) {
+      if (child) Type(*child, depth + 1);
+    }
+  }
+
+  void Expression(dd::unique_ptr<dd::ParsedExpression>& expression, const Scope& scope, bool table_function = false) {
+    Enter();
+    if (expression->GetExpressionClass() == dd::ExpressionClass::CAST) {
+      if (const auto& target = expression->Cast<dd::CastExpression>().GetTargetType()) Type(*target, 0);
+    }
+    if (expression->GetExpressionClass() == dd::ExpressionClass::SUBQUERY) {
+      auto& subquery = expression->Cast<dd::SubqueryExpression>().SubqueryMutable();
+      if (subquery && subquery->node) Node(*subquery->node, scope);
+    } else if (expression->GetExpressionClass() == dd::ExpressionClass::FUNCTION && !table_function) {
+      auto& function = expression->Cast<dd::FunctionExpression>();
+      const auto path = function.GetQualifiedName().Path();
+      if (!path.empty() && IsSequenceFunctionName(FoldIdentifier(compat::Str(path.back())))) {
+        // nextval('s'): the sequence is the first argument, a string (DuckDB binds it by name).
+        dd::unique_ptr<dd::ParsedExpression>* first = nullptr;
+        for (auto& argument : function.GetArgumentsMutable()) {
+          if (!argument.HasName()) {
+            first = &argument.GetExpressionMutable();
+            break;
+          }
+        }
+        WrittenName name;
+        name.sequence = true;
+        if (first && *first && (*first)->GetExpressionClass() == dd::ExpressionClass::CONSTANT) {
+          const auto value = compat::ConstantValue((*first)->Cast<dd::ConstantExpression>());
+          if (!value.IsNull() && value.type().id() == dd::LogicalTypeId::VARCHAR) {
+            for (const auto& part : dd::QualifiedName::ParseComponents(value.ToString())) {
+              name.parts.push_back(compat::Str(part));
+            }
+            name.constant = first;
+          }
+        }
+        if (name.parts.empty()) {
+          unreadable_sequence = true;
+        } else {
+          names.push_back(std::move(name));
+        }
+      } else if (!path.empty()) {
+        CalledFunction called;
+        called.parts = Parts(function.GetQualifiedName());
+        called.call = &function;
+        if (!called.parts.empty()) functions.push_back(std::move(called));
+      }
+    }
+    dd::ParsedExpressionIterator::EnumerateChildren(*expression, [&](dd::unique_ptr<dd::ParsedExpression>& child) {
+      if (child) Expression(child, scope);
+    });
+    --depth_;
+  }
+
+  Scope outer_;
+  int depth_ = 0;
+};
+
+// The names a macro's definition holds (every overload's, with its parameters' defaults).
+void MacroNames(const dd::MacroCatalogEntry& macro, ActionNames& names) {
+  for (const auto& function : macro.macros) {
+    if (!function) continue;
+    auto copy = function->Copy();
+    for (auto& parameter : copy->default_parameters) {
+      if (parameter.second) names.Expression(parameter.second);
+    }
+    if (copy->type == dd::MacroType::SCALAR_MACRO) {
+      auto& scalar = copy->Cast<dd::ScalarMacroFunction>();
+      if (scalar.expression) names.Expression(scalar.expression);
+    } else if (copy->type == dd::MacroType::TABLE_MACRO) {
+      auto& table = copy->Cast<dd::TableMacroFunction>();
+      if (table.query_node) names.Node(*table.query_node);
+    } else {
+      throw dd::InternalException("a macro of a kind this can't read");
+    }
+  }
+}
+
+// The entry at exactly this place, or nullptr.
+dd::optional_ptr<dd::CatalogEntry> EntryAt(dd::ClientContext& context, dd::CatalogType type, const std::string& catalog,
+                                           const std::vector<std::string>& schema, const std::string& name) {
+  if (schema.empty()) return nullptr;
+  dd::vector<dd::Identifier> path;
+  for (const auto& part : schema) path.emplace_back(part);
+  try {
+    return dd::Catalog::GetEntry(
+        context,
+        dd::EntryLookupInfo(type, dd::QualifiedName::FromCatalogSchema(dd::Identifier(catalog), std::move(path),
+                                                                       dd::Identifier(name))),
+        dd::OnEntryNotFound::RETURN_NULL);
+  } catch (const std::exception&) {
+    return nullptr;  // no such schema there: nothing by that name
+  }
+}
+
+// What a name is for the trigger's own table, whatever the session ("canonical",
+// triggers.hpp). `ambiguous`: it is more than one object.
+dd::optional_ptr<dd::CatalogEntry> ForTheTable(dd::ClientContext& context, dd::CatalogType type,
+                                               const std::vector<std::string>& parts, const ObjectPath& table,
+                                               bool& ambiguous) {
+  const std::vector<std::string> main_schema{DEFAULT_SCHEMA};
+  const std::string& name = parts.back();
+  std::vector<dd::optional_ptr<dd::CatalogEntry>> found;
+  auto look = [&](const std::vector<std::string>& schema) {
+    auto entry = EntryAt(context, type, table.catalog, schema, name);
+    if (entry && std::find(found.begin(), found.end(), entry) == found.end()) found.push_back(entry);
+  };
+  if (parts.size() == 1) {
+    look(table.schema_path);
+    look(main_schema);
+  } else {
+    const std::vector<std::string> qualifier(parts.begin(), parts.end() - 1);
+    look(qualifier);  // a schema path in the table's catalog
+    if (IdentifiersEqual(qualifier.front(), table.catalog)) {
+      // catalog.schemas.name, and catalog.name (the catalog's default schema)
+      look(qualifier.size() > 1 ? std::vector<std::string>(qualifier.begin() + 1, qualifier.end()) : main_schema);
+    }
+  }
+  ambiguous = found.size() > 1;
+  return found.size() == 1 ? found[0] : nullptr;
+}
+
+// What the name is in this session, found the way DuckDB's binder finds a table's, a view's
+// and a sequence's (CTEs aside). Throws where DuckDB would (a qualifier that reads two ways).
+dd::optional_ptr<dd::CatalogEntry> InThisSession(dd::ClientContext& context, dd::CatalogType type,
+                                                 const std::vector<std::string>& parts) {
+  dd::vector<dd::Identifier> path;
+  for (const auto& part : parts) path.emplace_back(part);
+  dd::CatalogEntryRetriever retriever(context);
+  return dd::Catalog::GetEntry(context,
+                               dd::EntryLookupInfo(type, dd::Binder::BindTableName(retriever, dd::QualifiedName::FromPath(path))),
+                               dd::OnEntryNotFound::RETURN_NULL);
+}
+
+// A session's own temporary object (DuckDB marks its built-in views temporary too: not those).
+bool IsTemporary(dd::CatalogEntry& entry) {
+  return IdentifiersEqual(compat::Str(entry.ParentCatalog().GetName()), TEMP_CATALOG) ||
+         (entry.temporary && !entry.internal);
+}
+
+std::string Written(const std::vector<std::string>& parts) {
+  std::string text;
+  for (const auto& part : parts) text += (text.empty() ? "" : ".") + QuoteIdentifierIfNeeded(part);
+  return text;
+}
+
+// The sequences an expression takes numbers from (nextval and its kin, bound by name).
+void SequencesOf(const dd::Expression& expression, std::vector<dd::CatalogEntry*>& sequences) {
+  if (expression.GetExpressionClass() == dd::ExpressionClass::BOUND_FUNCTION) {
+    const auto& call = expression.Cast<dd::BoundFunctionExpression>();
+    if (IsSequenceFunctionName(FoldIdentifier(compat::Str(call.Function().GetName()))) && call.BindInfo()) {
+      sequences.push_back(&call.BindInfo()->Cast<dd::NextvalBindData>().sequence);
+    }
+  }
+  dd::ExpressionIterator::EnumerateChildren(expression, [&](const dd::Expression& child) { SequencesOf(child, sequences); });
+}
+
+// The tables, views and sequences a body's plan reaches: scanned, read through (a view),
+// written (`written`, too), taken numbers from. Not those of another trigger's body beneath
+// it, which is judged on its own; nor what a view reads, the view's.
+void CollectReached(dd::ClientContext& context, const dd::LogicalOperator& op, const TriggerBodies& bodies, bool root,
+                    std::vector<dd::CatalogEntry*>& reached, std::vector<dd::TableCatalogEntry*>& written) {
+  if (!root) {
+    const TriggerBody* other = TriggerBodyAt(bodies, op);
+    if (other && !other->base) return;
+  }
+  dd::LogicalOperatorVisitor::EnumerateExpressions(op, [&](const dd::unique_ptr<dd::Expression>* e) {
+    if (e && *e) SequencesOf(**e, reached);
+  });
+  if (op.type == OpType::LOGICAL_EXTENSION_OPERATOR) {
+    if (const auto* marker = dynamic_cast<const ViewMarker*>(&op)) {
+      auto view = EntryAt(context, dd::CatalogType::TABLE_ENTRY, marker->view.catalog, marker->view.schema_path,
+                          marker->view.object_name);
+      if (!view) throw dd::InternalException("a view a trigger's body reads could not be found again");
+      reached.push_back(view.get());
+      return;
+    }
+  }
+  if (op.type == OpType::LOGICAL_GET) {
+    if (auto table = op.Cast<dd::LogicalGet>().GetTable()) reached.push_back(table.get());
+  }
+  if (dd::TableCatalogEntry* table = WrittenTable(op)) {
+    reached.push_back(table);
+    written.push_back(table);
+  }
+  // The defaults DuckDB bound for a written table's columns (it copies some into the plan's
+  // expressions, where the walk above finds them, and keeps the rest here).
+  const dd::vector<dd::unique_ptr<dd::Expression>>* defaults = nullptr;
+  if (op.type == OpType::LOGICAL_INSERT) defaults = &op.Cast<dd::LogicalInsert>().bound_defaults;
+  if (op.type == OpType::LOGICAL_UPDATE) defaults = &op.Cast<dd::LogicalUpdate>().bound_defaults;
+  if (op.type == OpType::LOGICAL_MERGE_INTO) defaults = &op.Cast<dd::LogicalMergeInto>().bound_defaults;
+  if (defaults) {
+    for (const auto& expression : *defaults) {
+      if (expression) SequencesOf(*expression, reached);
+    }
+  }
+  for (const auto& child : op.children) {
+    if (child) CollectReached(context, *child, bodies, false, reached, written);
+  }
+}
+
+// The CTEs a plan defines, by table index, with their names.
+void IndexCtes(const dd::LogicalOperator& op, std::map<dd::idx_t, std::string>& names) {
+  if (op.type == OpType::LOGICAL_MATERIALIZED_CTE || op.type == OpType::LOGICAL_RECURSIVE_CTE) {
+    const auto& cte = op.Cast<dd::LogicalCTE>();
+    names[cte.table_index.index] = compat::Str(cte.ctename);
+  }
+  for (const auto& child : op.children) {
+    if (child) IndexCtes(*child, names);
+  }
+}
+
+// The CTEs defined within a body and the ones its CTE scans read, not looking into another
+// trigger's body beneath it (which is judged on its own).
+void CteUses(const dd::LogicalOperator& op, const TriggerBodies& bodies, bool root, std::set<dd::idx_t>& defined,
+             std::vector<dd::idx_t>& read) {
+  if (!root) {
+    const TriggerBody* other = TriggerBodyAt(bodies, op);
+    if (other && !other->base) return;
+  }
+  if (op.type == OpType::LOGICAL_MATERIALIZED_CTE || op.type == OpType::LOGICAL_RECURSIVE_CTE) {
+    defined.insert(op.Cast<dd::LogicalCTE>().table_index.index);
+  } else if (op.type == OpType::LOGICAL_CTE_REF) {
+    read.push_back(op.Cast<dd::LogicalCTERef>().cte_index.index);
+  }
+  for (const auto& child : op.children) {
+    if (child) CteUses(*child, bodies, false, defined, read);
+  }
+}
+
+const char* const kOwnerRestores =
+    " The trigger's owner can run CREATE OR REPLACE TRIGGER once, with the same text, which stores the names in its "
+    "action with their schema";
+
+// The names of one trigger's body, and of the macros it calls, held against this session
+// ("Names in a body", triggers.hpp). Collects what each name is for the trigger's table.
+class NameCheck {
+ public:
+  NameCheck(dd::ClientContext& context, const ObjectPath& table, std::string what)
+      : context_(context), table_(table), what_(std::move(what)) {}
+
+  std::set<const dd::CatalogEntry*> meant;
+  // Every name of one part (folded) the body and its macros give a table, view or CTE.
+  std::set<std::string> bare_names;
+
+  // Why the names refuse the statement ("" when they don't). `macro`: the macro they are in.
+  std::string Names(ActionNames& written, const std::string& macro, int depth) {
+    for (const auto& name : written.names) {
+      if (!name.sequence && name.parts.size() == 1) bare_names.insert(FoldIdentifier(name.parts[0]));
+    }
+    const std::string where = macro.empty() ? "" : " calls macro " + macro + ", which";
+    if (written.unreadable_sequence) {
+      return what_ + where + " takes a sequence's numbers by a name that is not a plain string (nextval('schema.name')), "
+             "which can't be checked against this session's own sequences, so it fires for no one but an administrator. " +
+             std::string(macro.empty() ? "Its owner can name the sequence as a plain string with CREATE OR REPLACE TRIGGER"
+                                       : "An administrator can name the sequence as a plain string in the macro");
+    }
+    if (written.unreadable_table) {
+      return what_ + where + " reads a table through query() or query_table() with something other than one table's "
+             "name as a plain string, which can't be checked against this session's own tables, so it fires for no one "
+             "but an administrator. " +
+             std::string(macro.empty() ? "Its owner can name the table itself in the action with CREATE OR REPLACE TRIGGER"
+                                       : "An administrator can name the table itself in the macro");
+    }
+    for (const auto& name : written.names) {
+      const auto type = name.sequence ? dd::CatalogType::SEQUENCE_ENTRY : dd::CatalogType::TABLE_ENTRY;
+      bool ambiguous = false;
+      auto for_the_table = ForTheTable(context_, type, name.parts, table_, ambiguous);
+      if (for_the_table) meant.insert(for_the_table.get());
+      // Bound to a CTE (or transition table) of the body's or the macro's own: no table. One
+      // from outside the body is the plan's to catch (TriggerBody::outer_ctes).
+      if (name.cte) continue;
+      auto here = InThisSession(context_, type, name.parts);
+      if (!here) continue;  // nothing in this session: DuckDB bound no object by it
+      if (here->internal) {
+        meant.insert(here.get());  // DuckDB's own (information_schema, ...): no session's to shadow
+        continue;
+      }
+      const std::string named = where + " names " + Written(name.parts);
+      if (ambiguous) {
+        return what_ + named +
+               (name.parts.size() == 1
+                    ? std::string(" without its schema, and both the table's own schema and its catalog's main schema "
+                                  "have one")
+                    : std::string(", which reads both as a schema's object and as its catalog's (catalog.name), and "
+                                  "both are there")) +
+               ": it is not known which is meant, for any session." +
+               (macro.empty() ? std::string(" The trigger's owner can name it with its schema (schema.name) with "
+                                            "CREATE OR REPLACE TRIGGER")
+                              : std::string(" An administrator can name it with its schema in the macro"));
+      }
+      if (here.get() != for_the_table.get()) return what_ + named + Mismatch(*here, name, macro);
+    }
+    for (const auto& function : written.functions) {
+      // Which function a name is, is not this session's to decide: the body is bound under its
+      // table's name scope (name_scope.hpp). A macro found that way is expanded into the body,
+      // so the tables, views and sequences its own text names are held like the body's.
+      const auto type = function.table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : dd::CatalogType::SCALAR_FUNCTION_ENTRY;
+      dd::optional_ptr<dd::CatalogEntry> called;
+      try {
+        called = FindUnderScope(context_, type, table_.catalog, table_.schema_path, function.parts);
+      } catch (const std::exception&) {
+        continue;  // nothing the scope finds: DuckDB's binder has said so
+      }
+      if (!called || IsDuckDbsOwn(*called) ||
+          (called->type != dd::CatalogType::MACRO_ENTRY && called->type != dd::CatalogType::TABLE_MACRO_ENTRY)) {
+        continue;  // a function: what it reads, if anything, is not named in SQL
+      }
+      if (!seen_.insert(called.get()).second) continue;
+      if (depth >= 16) return what_ + " calls macros nested too deeply to check; ask an administrator";
+      ActionNames inside;
+      MacroNames(called->Cast<dd::MacroCatalogEntry>(), inside);
+      auto problem = Names(inside, QuoteIdentifierIfNeeded(compat::Str(called->name)), depth + 1);
+      if (!problem.empty()) return problem;
+    }
+    return "";
+  }
+
+ private:
+  // What to say when a name is another object in this session.
+  std::string Mismatch(dd::CatalogEntry& here, const WrittenName& name, const std::string& macro) {
+    const bool bare = name.parts.size() == 1;
+    if (IsTemporary(here)) {
+      return ", and in this session that is a temporary object of the session's own (a name without its catalog "
+             "finds the session's temporary objects first): the statement would not do what the trigger is there to "
+             "do. Drop or rename the temporary object to write this table";
+    }
+    std::string text = ", and in this session that is another object than it is for the trigger's own table (a name "
+                       "without its catalog follows the session's current catalog and search path): the statement "
+                       "would not do what the trigger is there to do";
+    if (!IdentifiersEqual(PathOfEntry(here).catalog, table_.catalog)) {
+      text += ". Run USE " + QuoteIdentifierIfNeeded(table_.catalog) + " first";
+    } else if (bare) {
+      text += macro.empty() ? "." + std::string(kOwnerRestores)
+                            : std::string(". An administrator can name it with its schema in the macro");
+    }
+    return text;
+  }
+
+  dd::ClientContext& context_;
+  const ObjectPath& table_;
+  std::string what_;
+  std::set<const dd::CatalogEntry*> seen_;
+};
+
+// ---- Carried columns (triggers.hpp) ----
+
+// One use of a column: the reference, or nullptr where an operator names the column
+// without an expression (a correlated-column list).
+struct ColumnUse {
+  dd::idx_t column;
+  const dd::BoundColumnRefExpression* ref;
+};
+
+// A column of an operator: its table index and the column's place.
+using PlanColumn = std::pair<dd::idx_t, dd::idx_t>;
+
+// Every use of every column in a plan, and where its operators sit.
+struct PlanIndex {
+  std::vector<const dd::LogicalOperator*> operators;
+  std::unordered_map<dd::idx_t, std::vector<ColumnUse>> uses;                        // by table index
+  std::unordered_map<dd::idx_t, std::vector<const dd::LogicalOperator*>> producers;  // by table index
+  std::unordered_map<dd::idx_t, std::vector<const dd::LogicalOperator*>> cte_scans;  // by CTE index
+  std::unordered_map<const dd::LogicalOperator*, const dd::LogicalOperator*> parent;
+  // The entries of projections that are nothing but a column: the projection and the place.
+  std::unordered_map<const dd::Expression*, std::pair<const dd::LogicalOperator*, dd::idx_t>> projected;
+  // Operators holding an expression whose column uses can't be listed (a subquery that was
+  // not planned, a lambda's body, a reference by position).
+  std::unordered_set<const dd::LogicalOperator*> opaque;
+};
+
+// The expression, if it is nothing but a column of the query it sits in.
+const dd::BoundColumnRefExpression* BareColumn(const dd::unique_ptr<dd::Expression>& expr) {
+  if (!expr || expr->GetExpressionClass() != dd::ExpressionClass::BOUND_COLUMN_REF) return nullptr;
+  const auto& ref = expr->Cast<dd::BoundColumnRefExpression>();
+  return ref.Depth() == 0 ? &ref : nullptr;
+}
+
+PlanColumn ColumnOf(const dd::ColumnBinding& binding) {
+  return {binding.table_index.index, binding.column_index.GetIndex()};
+}
+
+void IndexExpression(const dd::Expression& expr, const dd::LogicalOperator& op, PlanIndex& index) {
+  switch (expr.GetExpressionClass()) {
+    case dd::ExpressionClass::BOUND_COLUMN_REF: {
+      const auto& ref = expr.Cast<dd::BoundColumnRefExpression>();
+      index.uses[ref.Binding().table_index.index].push_back({ref.Binding().column_index.GetIndex(), &ref});
+      return;
+    }
+    case dd::ExpressionClass::BOUND_SUBQUERY:
+    case dd::ExpressionClass::BOUND_LAMBDA:
+    case dd::ExpressionClass::BOUND_LAMBDA_REF:
+    case dd::ExpressionClass::BOUND_REF:
+      index.opaque.insert(&op);
+      break;
+    default:
+      break;
+  }
+  // Throws on an expression class it does not know: the caller then carries nothing.
+  dd::ExpressionIterator::EnumerateChildren(
+      expr, [&](const dd::Expression& child) { IndexExpression(child, op, index); });
+}
+
+void IndexPlan(const dd::LogicalOperator& op, const dd::LogicalOperator* parent, PlanIndex& index) {
+  index.operators.push_back(&op);
+  index.parent[&op] = parent;
+  for (const auto& table : op.GetTableIndex()) index.producers[table.index].push_back(&op);
+  dd::LogicalOperatorVisitor::EnumerateExpressions(op, [&](const dd::unique_ptr<dd::Expression>* e) {
+    if (e && *e) IndexExpression(**e, op, index);
+  });
+  const dd::CorrelatedColumns* correlated = nullptr;
+  switch (op.type) {
+    case OpType::LOGICAL_PROJECTION:
+      for (dd::idx_t place = 0; place < op.expressions.size(); ++place) {
+        if (BareColumn(op.expressions[place])) index.projected[op.expressions[place].get()] = {&op, place};
+      }
+      break;
+    case OpType::LOGICAL_DEPENDENT_JOIN:
+      correlated = &op.Cast<dd::LogicalDependentJoin>().correlated_columns;
+      break;
+    case OpType::LOGICAL_TRIGGER:
+      correlated = &op.Cast<dd::LogicalTrigger>().correlated_columns;
+      break;
+    case OpType::LOGICAL_MATERIALIZED_CTE:
+      correlated = &op.Cast<dd::LogicalMaterializedCTE>().correlated_columns;
+      break;
+    case OpType::LOGICAL_RECURSIVE_CTE:
+      correlated = &op.Cast<dd::LogicalRecursiveCTE>().correlated_columns;
+      break;
+    case OpType::LOGICAL_CTE_REF:
+      index.cte_scans[op.Cast<dd::LogicalCTERef>().cte_index.index].push_back(&op);
+      break;
+    default:
+      break;
+  }
+  if (correlated) {
+    for (const auto& column : *correlated) {
+      index.uses[column.binding.table_index.index].push_back({column.binding.column_index.GetIndex(), nullptr});
+    }
+  }
+  for (const auto& child : op.children) {
+    if (child) IndexPlan(*child, &op, index);
+  }
+}
+
+// The operators whose every use of a column IndexPlan lists: a use is an expression of
+// theirs that LogicalOperatorVisitor::EnumerateExpressions hands out, or an entry of a
+// correlated-column list. (A table function with an input, a recursive CTE, a pivot, a
+// positional or ASOF join, a write, ... are not among them: beneath a write that has one,
+// nothing is carried.)
+bool ListsItsColumnUses(const dd::LogicalOperator& op, const PlanIndex& index) {
+  if (index.opaque.count(&op)) return false;
+  switch (op.type) {
+    case OpType::LOGICAL_GET:
+      return op.children.empty();
+    case OpType::LOGICAL_FILTER:
+    case OpType::LOGICAL_PROJECTION:
+    case OpType::LOGICAL_AGGREGATE_AND_GROUP_BY:
+    case OpType::LOGICAL_WINDOW:
+    case OpType::LOGICAL_UNNEST:
+    case OpType::LOGICAL_LIMIT:
+    case OpType::LOGICAL_ORDER_BY:
+    case OpType::LOGICAL_TOP_N:
+    case OpType::LOGICAL_DISTINCT:
+    case OpType::LOGICAL_CROSS_PRODUCT:
+    case OpType::LOGICAL_COMPARISON_JOIN:
+    case OpType::LOGICAL_DELIM_JOIN:
+    case OpType::LOGICAL_DEPENDENT_JOIN:
+    case OpType::LOGICAL_ANY_JOIN:
+    case OpType::LOGICAL_UNION:
+    case OpType::LOGICAL_EXCEPT:
+    case OpType::LOGICAL_INTERSECT:
+    case OpType::LOGICAL_MATERIALIZED_CTE:
+    case OpType::LOGICAL_CTE_REF:
+    case OpType::LOGICAL_DELIM_GET:
+    case OpType::LOGICAL_EXPRESSION_GET:
+    case OpType::LOGICAL_CHUNK_GET:
+    case OpType::LOGICAL_DUMMY_SCAN:
+    case OpType::LOGICAL_EMPTY_RESULT:
+      return true;
+    case OpType::LOGICAL_EXTENSION_OPERATOR:
+      return dynamic_cast<const ViewMarker*>(&op) != nullptr;  // passes its view's columns on
+    default:
+      return false;
+  }
+}
+
+bool SubtreeListsItsColumnUses(const dd::LogicalOperator& op, const PlanIndex& index) {
+  if (!ListsItsColumnUses(op, index)) return false;
+  for (const auto& child : op.children) {
+    if (child && !SubtreeListsItsColumnUses(*child, index)) return false;
+  }
+  return true;
+}
+
+// Filters and joins hand their children's columns on as themselves: above them a column
+// is still that column, used only where an expression names it.
+bool HandsColumnsOn(OpType type) {
+  return type == OpType::LOGICAL_FILTER || type == OpType::LOGICAL_CROSS_PRODUCT ||
+         type == OpType::LOGICAL_COMPARISON_JOIN || type == OpType::LOGICAL_DELIM_JOIN ||
+         type == OpType::LOGICAL_DEPENDENT_JOIN || type == OpType::LOGICAL_ANY_JOIN;
+}
+
+// Is `target` reached from `from` through joins alone?
+bool ReachesThroughJoins(const dd::LogicalOperator& from, const dd::LogicalOperator& target) {
+  if (&from == &target) return true;
+  if (!HandsColumnsOn(from.type) || from.type == OpType::LOGICAL_FILTER || from.type == OpType::LOGICAL_DEPENDENT_JOIN) {
+    return false;
+  }
+  for (const auto& child : from.children) {
+    if (child && ReachesThroughJoins(*child, target)) return true;
+  }
+  return false;
+}
+
+// Is `op` inside the subtree of `ancestor` (or `ancestor` itself)?
+bool Within(const PlanIndex& index, const dd::LogicalOperator* op, const dd::LogicalOperator* ancestor) {
+  if (!ancestor) return false;
+  for (int depth = 0; op && depth < 100000; ++depth) {
+    if (op == ancestor) return true;
+    auto parent = index.parent.find(op);
+    op = parent == index.parent.end() ? nullptr : parent->second;
+  }
+  return false;
+}
+
+const std::vector<ColumnUse>& UsesOfTable(const PlanIndex& index, dd::idx_t table) {
+  static const std::vector<ColumnUse> none;
+  auto found = index.uses.find(table);
+  return found == index.uses.end() ? none : found->second;
+}
+
+// The one operator with table index `table`, or nullptr.
+const dd::LogicalOperator* SoleProducer(const PlanIndex& index, dd::idx_t table) {
+  auto found = index.producers.find(table);
+  return found != index.producers.end() && found->second.size() == 1 ? found->second[0] : nullptr;
+}
+
+// The columns a materialized CTE keeps (its definition's, by place), for a scan of it.
+std::optional<std::vector<PlanColumn>> ScannedDefinition(const PlanIndex& index, const dd::LogicalOperator& cte_scan) {
+  const auto& ref = cte_scan.Cast<dd::LogicalCTERef>();
+  const dd::LogicalOperator* cte = SoleProducer(index, ref.cte_index.index);
+  if (ref.is_recurring || SoleProducer(index, ref.table_index.index) != &cte_scan || !cte ||
+      cte->type != OpType::LOGICAL_MATERIALIZED_CTE || cte->children.size() != 2 || !cte->children[0]) {
+    return std::nullopt;
+  }
+  // (GetColumnBindings is not const, and changes nothing.)
+  const auto bindings = const_cast<dd::LogicalOperator&>(*cte->children[0]).GetColumnBindings();
+  if (bindings.size() != ref.chunk_types.size()) return std::nullopt;
+  std::vector<PlanColumn> columns;
+  for (const auto& binding : bindings) columns.push_back(ColumnOf(binding));
+  return columns;
+}
+
+// The column of a table scan that `column` is, unchanged: followed down through
+// projections that give it on as itself and scans of materialized CTEs that keep it.
+std::optional<PlanColumn> ScannedColumn(const PlanIndex& index, PlanColumn column) {
+  for (int depth = 0; depth < 1000; ++depth) {
+    const dd::LogicalOperator* op = SoleProducer(index, column.first);
+    if (!op) return std::nullopt;
+    if (op->type == OpType::LOGICAL_GET) return column;
+    if (op->type == OpType::LOGICAL_PROJECTION) {
+      const auto* ref = column.second < op->expressions.size() ? BareColumn(op->expressions[column.second]) : nullptr;
+      if (!ref) return std::nullopt;
+      column = ColumnOf(ref->Binding());
+    } else if (op->type == OpType::LOGICAL_CTE_REF) {
+      const auto kept = ScannedDefinition(index, *op);
+      if (!kept || column.second >= kept->size()) return std::nullopt;
+      column = (*kept)[column.second];
+    } else {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+struct PlanColumnHash {
+  size_t operator()(const PlanColumn& column) const {
+    return std::hash<dd::idx_t>()(column.first) * 1000003u ^ std::hash<dd::idx_t>()(column.second);
+  }
+};
+
+struct Carried {
+  const dd::LogicalGet* scan = nullptr;
+  std::vector<std::string> read;
+  std::vector<std::string> told;  // of `read`: the ones a key, an index or a CHECK makes so
+  std::vector<std::string> carried;
+  std::vector<const dd::LogicalOperator*> readers;
+};
+
+// Tells the columns the base write `dml` (under the base CTE `cte`) reads for the
+// statement from the ones the binder carries to the triggers; nullopt when the plan is not
+// laid out as triggers.hpp describes, and then every column the scan reads is a read.
+std::optional<Carried> CarriedColumns(dd::ClientContext& context, const PlanIndex& index, const dd::LogicalOperator& cte,
+                                      const dd::LogicalOperator& dml) {
+  if (cte.type != OpType::LOGICAL_MATERIALIZED_CTE || cte.children.size() != 2 || !cte.children[0] || !cte.children[1] ||
+      dml.children.size() != 1 || !dml.children[0] || index.opaque.count(&dml)) {
+    return std::nullopt;
+  }
+  dd::TableCatalogEntry* table = WrittenTable(dml);
+  if (!table) return std::nullopt;
+
+  // ---- The write: where it takes its row ids from, and the index of its own rows ----
+  const dd::BoundColumnRefExpression* row_id = nullptr;
+  const dd::LogicalOperator* projection = nullptr;  // an UPDATE's or a merge's input
+  dd::idx_t dml_index = 0;
+  const dd::vector<dd::unique_ptr<dd::BoundConstraint>>* constraints = nullptr;  // checked on written rows
+  if (dml.type != OpType::LOGICAL_DELETE) {
+    projection = dml.children[0].get();
+    if (projection->type != OpType::LOGICAL_PROJECTION || projection->children.size() != 1 || !projection->children[0] ||
+        projection->expressions.empty() || SoleProducer(index, projection->GetTableIndex()[0].index) != projection) {
+      return std::nullopt;
+    }
+  }
+  switch (dml.type) {
+    case OpType::LOGICAL_DELETE: {
+      const auto& del = dml.Cast<dd::LogicalDelete>();
+      if (!del.return_chunk || del.expressions.empty()) return std::nullopt;
+      row_id = BareColumn(del.expressions[0]);
+      dml_index = del.table_index.index;
+      break;
+    }
+    case OpType::LOGICAL_UPDATE: {
+      const auto& update = dml.Cast<dd::LogicalUpdate>();
+      if (!update.return_chunk) return std::nullopt;
+      row_id = BareColumn(projection->expressions.back());
+      dml_index = update.table_index.index;
+      constraints = &update.bound_constraints;
+      break;
+    }
+    case OpType::LOGICAL_MERGE_INTO: {
+      const auto& merge = dml.Cast<dd::LogicalMergeInto>();
+      // INSERT ... ON CONFLICT has no delete action; one would take columns by place.
+      if (!merge.return_chunk || !merge.delete_return_columns.empty() ||
+          merge.row_id_start >= projection->expressions.size()) {
+        return std::nullopt;
+      }
+      row_id = BareColumn(projection->expressions[merge.row_id_start]);
+      dml_index = merge.table_index.index;
+      constraints = &merge.bound_constraints;
+      break;
+    }
+    default:
+      return std::nullopt;
+  }
+  if (!row_id) return std::nullopt;
+
+  // ---- The scan: the plain scan of the written table the row ids come from ----
+  const auto origin = ScannedColumn(index, ColumnOf(row_id->Binding()));
+  if (!origin) return std::nullopt;
+  const dd::idx_t scanned = origin->first;
+  const auto& scan = SoleProducer(index, scanned)->Cast<dd::LogicalGet>();
+  const auto& column_ids = scan.GetColumnIds();
+  if (scan.GetTable().get() != table || !scan.children.empty() || scan.table_filters.HasFilters() ||
+      origin->second >= column_ids.size() || !column_ids[origin->second].IsRowIdColumn()) {
+    return std::nullopt;
+  }
+  // Every operator beneath the write is one whose column uses the index lists.
+  if (!SubtreeListsItsColumnUses(*dml.children[0], index)) return std::nullopt;
+
+  // ---- Where the scan's columns go as themselves ----
+  // A column given on unchanged is still the scan's column, whatever it is called there:
+  // an entry of a projection that is nothing but the column, and a column of a
+  // materialized CTE's definition for every scan of that CTE (DuckDB keeps the outer rows
+  // of a correlated subquery in such CTEs).
+  std::unordered_map<PlanColumn, dd::idx_t, PlanColumnHash> same_as;  // -> the scan's position
+  for (dd::idx_t position = 0; position < column_ids.size(); ++position) same_as[{scanned, position}] = position;
+  for (bool grown = true; grown;) {
+    grown = false;
+    for (const dd::LogicalOperator* op : index.operators) {
+      if (op->type == OpType::LOGICAL_PROJECTION && !op->GetTableIndex().empty() &&
+          SoleProducer(index, op->GetTableIndex()[0].index) == op) {
+        const dd::idx_t projected = op->GetTableIndex()[0].index;
+        for (dd::idx_t place = 0; place < op->expressions.size(); ++place) {
+          const auto* ref = BareColumn(op->expressions[place]);
+          auto source = ref ? same_as.find(ColumnOf(ref->Binding())) : same_as.end();
+          if (source == same_as.end()) continue;
+          const dd::idx_t position = source->second;  // (emplace may move the map's entries)
+          if (same_as.emplace(PlanColumn{projected, place}, position).second) grown = true;
+        }
+      } else if (op->type == OpType::LOGICAL_MATERIALIZED_CTE && op->children.size() == 2 && op->children[0]) {
+        const auto kept = const_cast<dd::LogicalOperator&>(*op->children[0]).GetColumnBindings();
+        const bool keeps_one = std::any_of(kept.begin(), kept.end(), [&](const dd::ColumnBinding& binding) {
+          return same_as.count(ColumnOf(binding)) > 0;
+        });
+        if (!keeps_one) continue;
+        // Every scan of a CTE that keeps a column of the scan must be one this can follow.
+        const dd::idx_t cte_index = op->Cast<dd::LogicalMaterializedCTE>().table_index.index;
+        if (SoleProducer(index, cte_index) != op) return std::nullopt;
+        auto cte_scans = index.cte_scans.find(cte_index);
+        if (cte_scans == index.cte_scans.end()) continue;
+        for (const dd::LogicalOperator* cte_scan : cte_scans->second) {
+          const auto columns = ScannedDefinition(index, *cte_scan);
+          if (!columns) return std::nullopt;
+          const dd::idx_t scan_index = cte_scan->Cast<dd::LogicalCTERef>().table_index.index;
+          for (dd::idx_t place = 0; place < columns->size(); ++place) {
+            auto source = same_as.find((*columns)[place]);
+            if (source == same_as.end()) continue;
+            const dd::idx_t position = source->second;
+            if (same_as.emplace(PlanColumn{scan_index, place}, position).second) grown = true;
+          }
+        }
+      }
+    }
+  }
+  // Each operator that has such a column sits beneath the write, and from it up only
+  // filters and joins (which hand it on as itself) come before the operator that takes
+  // it: a projection or an aggregate (which give on only what their expressions name), a
+  // materialized CTE's definition (followed above), or the write.
+  std::unordered_set<const dd::LogicalOperator*> holders;
+  for (const auto& [column, position] : same_as) {
+    const dd::LogicalOperator* holder = SoleProducer(index, column.first);
+    if (!holder) return std::nullopt;
+    holders.insert(holder);
+  }
+  for (const dd::LogicalOperator* holder : holders) {
+    if (!Within(index, holder, dml.children[0].get())) return std::nullopt;
+    for (const dd::LogicalOperator* below = holder;;) {
+      const dd::LogicalOperator* above = index.parent.at(below);
+      if (!above) return std::nullopt;
+      if (above == &dml || above->type == OpType::LOGICAL_PROJECTION ||
+          above->type == OpType::LOGICAL_AGGREGATE_AND_GROUP_BY) {
+        break;
+      }
+      if (above->type == OpType::LOGICAL_MATERIALIZED_CTE && above->children.size() == 2) {
+        if (above->children[0].get() == below) break;  // its definition
+      } else if (!HandsColumnsOn(above->type)) {
+        return std::nullopt;
+      }
+      below = above;
+    }
+  }
+
+  // ---- Each use of such a column: handed to the write, given on as itself, or a read ----
+  // Which column of the table a position of the scan is.
+  auto scans_column = [&](dd::idx_t position, dd::PhysicalIndex column) {
+    const auto& id = column_ids[position];
+    return !id.IsRowIdColumn() && !id.IsVirtualColumn() && !id.IsEmptyColumn() &&
+           id.GetPrimaryIndex() == table->GetColumns().GetColumn(column).Logical().index;
+  };
+  // Is `ref` the write's own entry that puts the column back where it came from ("c = c"),
+  // or (DELETE) an entry of the list of the row it deletes?
+  auto hands_over = [&](dd::idx_t position, const dd::BoundColumnRefExpression* ref) {
+    switch (dml.type) {
+      case OpType::LOGICAL_DELETE:
+        return std::any_of(dml.expressions.begin(), dml.expressions.end(),
+                           [&](const dd::unique_ptr<dd::Expression>& e) { return e.get() == ref; });
+      case OpType::LOGICAL_UPDATE: {
+        const auto& update = dml.Cast<dd::LogicalUpdate>();
+        for (dd::idx_t i = 0; i < update.expressions.size() && i < update.columns.size(); ++i) {
+          if (update.expressions[i].get() == ref && scans_column(position, update.columns[i])) return true;
+        }
+        return false;
+      }
+      default: {
+        for (const auto& [when, actions] : dml.Cast<dd::LogicalMergeInto>().actions) {
+          for (const auto& action : actions) {
+            if (!action || action->action_type != dd::MergeActionType::MERGE_UPDATE) continue;
+            for (dd::idx_t i = 0; i < action->expressions.size() && i < action->columns.size(); ++i) {
+              if (action->expressions[i].get() == ref && scans_column(position, action->columns[i])) return true;
+            }
+          }
+        }
+        return false;
+      }
+    }
+  };
+  std::vector<bool> read(column_ids.size(), false);
+  std::vector<bool> handed(column_ids.size(), false);
+  for (const auto& [table_index, uses] : index.uses) {
+    for (const auto& use : uses) {
+      auto same = same_as.find({table_index, use.column});
+      if (same == same_as.end()) continue;
+      const dd::idx_t position = same->second;
+      if (!use.ref || use.ref->Depth() != 0) {
+        read[position] = true;  // a subquery's, or named without an expression
+        continue;
+      }
+      // Given on as itself: the entry of a projection that is followed above.
+      auto given_on = index.projected.find(use.ref);
+      if (given_on != index.projected.end() &&
+          same_as.count({given_on->second.first->GetTableIndex()[0].index, given_on->second.second})) {
+        continue;
+      }
+      if (hands_over(position, use.ref)) {
+        handed[position] = true;
+      } else {
+        read[position] = true;
+      }
+    }
+  }
+  // What the write takes from its input by place rather than through an expression.
+  if (projection) {
+    const dd::idx_t projected = projection->GetTableIndex()[0].index;
+    for (dd::idx_t place = 0; place < projection->expressions.size(); ++place) {
+      auto same = same_as.find({projected, place});
+      if (same == same_as.end()) continue;
+      if (dml.type == OpType::LOGICAL_UPDATE) {
+        // The OLD row image (kept only for the triggers' rows): handed over.
+        const auto& old_row = dml.Cast<dd::LogicalUpdate>().old_row_columns;
+        if (dml.Cast<dd::LogicalUpdate>().capture_old_rows &&
+            std::find(old_row.begin(), old_row.end(), place) != old_row.end()) {
+          handed[same->second] = true;
+        }
+      } else {
+        // A merge: its row ids, and the marker of a source row. A column there is a read.
+        const auto& merge = dml.Cast<dd::LogicalMergeInto>();
+        if (place >= merge.row_id_start || (merge.source_marker.IsValid() && merge.source_marker.GetIndex() == place)) {
+          read[same->second] = true;
+        }
+      }
+    }
+  }
+
+  // ---- What the write itself can tell of a column it is handed ----
+  // A constraint error of the write can name a key's value (a duplicate key, a key a
+  // foreign key still refers to: DuckDB runs an UPDATE that returns its rows as a delete
+  // and an insert), and a failed CHECK over several columns tells of the ones the
+  // statement did not set. Such columns are never carried: they need SELECT, as a DELETE
+  // on a table without triggers does for its unique indexes' columns and an UPDATE for
+  // such a CHECK's (DuckDB scans them there for the same checks). Every index counts: an
+  // index of a kind this does not know may have errors of its own.
+  std::unordered_set<dd::idx_t> told;  // logical column indexes
+  for (const auto& table_index : table->GetStorageInfo(context).index_info) {
+    for (const auto& column : table_index.column_set) {
+      told.insert(table->GetColumns().GetColumn(dd::PhysicalIndex(column)).Logical().index);
+    }
+  }
+  if (constraints) {
+    // The CHECK as written, beside its bound form (DuckDB binds them in the table's order):
+    // one that calls anything but DuckDB's own functions (a macro: its body is bound in the
+    // writer's session) can tell of a single column too.
+    const auto& written = table->GetConstraints();
+    const bool aligned = written.size() == constraints->size();
+    for (size_t i = 0; i < constraints->size(); ++i) {
+      const auto& constraint = (*constraints)[i];
+      if (!constraint || constraint->type != dd::ConstraintType::CHECK) continue;
+      const auto& checked = constraint->Cast<dd::BoundCheckConstraint>().bound_columns;
+      bool tells = checked.size() >= 2;
+      if (!tells) {
+        const dd::Constraint* as_written = aligned ? written[i].get() : nullptr;
+        tells = !as_written || as_written->type != dd::ConstraintType::CHECK ||
+                !as_written->Cast<dd::CheckConstraint>().expression ||
+                !UsesOnlyBuiltIns(context, *as_written->Cast<dd::CheckConstraint>().expression);
+      }
+      if (!tells) continue;
+      for (const auto& column : checked) told.insert(table->GetColumns().GetColumn(column).Logical().index);
+    }
+  }
+
+  Carried result;
+  result.scan = &scan;
+  std::vector<std::string> candidates;
+  for (dd::idx_t position = 0; position < column_ids.size(); ++position) {
+    const auto& id = column_ids[position];
+    if (id.IsRowIdColumn() || id.IsVirtualColumn() || id.IsEmptyColumn()) continue;
+    const std::string name = compat::Str(table->GetColumn(dd::LogicalIndex(id.GetPrimaryIndex())).Name());
+    // A column nothing uses is not one this can explain: a read.
+    const bool carried = handed[position] && !read[position] && !told.count(id.GetPrimaryIndex());
+    auto& names = carried ? candidates : result.read;
+    if (std::find(names.begin(), names.end(), name) == names.end()) names.push_back(name);
+    if (handed[position] && !read[position] && told.count(id.GetPrimaryIndex()) &&
+        std::find(result.told.begin(), result.told.end(), name) == result.told.end()) {
+      result.told.push_back(name);
+    }
+  }
+  for (const auto& name : candidates) {
+    if (std::find(result.read.begin(), result.read.end(), name) == result.read.end()) result.carried.push_back(name);
+  }
+
+  // ---- The write's rows: into the base CTE through a projection of bare columns only ----
+  const dd::LogicalOperator* top = cte.children[0].get();
+  while (top->type == OpType::LOGICAL_MATERIALIZED_CTE && top->children.size() == 2 && top->children[1]) {
+    top = top->children[1].get();  // a WITH of the statement's own
+  }
+  if (top->type != OpType::LOGICAL_PROJECTION || top->children.size() != 1 || !top->children[0] ||
+      !ReachesThroughJoins(*top->children[0], dml)) {
+    return std::nullopt;
+  }
+  if (index.producers.count(dml_index) && SoleProducer(index, dml_index) != &dml) return std::nullopt;
+  std::vector<bool> from_write(top->expressions.size(), false);
+  for (const auto& use : UsesOfTable(index, dml_index)) {
+    bool bare = false;
+    for (dd::idx_t i = 0; i < top->expressions.size(); ++i) {
+      if (use.ref && use.ref->Depth() == 0 && top->expressions[i].get() == use.ref) bare = from_write[i] = true;
+    }
+    if (!bare) return std::nullopt;  // computed from the rows (a generated column), or used elsewhere
+  }
+
+  // ---- The base CTE's scans: all within its scope; blind, or a row reader ----
+  auto scans = index.cte_scans.find(cte.Cast<dd::LogicalMaterializedCTE>().table_index.index);
+  if (scans != index.cte_scans.end()) {
+    for (const dd::LogicalOperator* cte_scan : scans->second) {
+      if (!Within(index, cte_scan, cte.children[1].get())) return std::nullopt;
+      const auto& ref = cte_scan->Cast<dd::LogicalCTERef>();
+      const dd::LogicalOperator* parent = index.parent.at(cte_scan);
+      bool blind = parent && !index.opaque.count(parent) &&
+                   (parent->type == OpType::LOGICAL_PROJECTION ||
+                    parent->type == OpType::LOGICAL_AGGREGATE_AND_GROUP_BY) &&
+                   ref.chunk_types.size() == from_write.size() &&
+                   SoleProducer(index, ref.table_index.index) == cte_scan;
+      for (const auto& use : UsesOfTable(index, ref.table_index.index)) {
+        blind = blind && use.column < from_write.size() && !from_write[use.column];
+      }
+      if (!blind) result.readers.push_back(cte_scan);
+    }
+  }
+  return result;
+}
 
 }  // namespace
 
@@ -495,6 +1787,9 @@ TriggerBodies FindTriggerBodies(dd::ClientContext& context, const Snapshot& snap
   Finder finder(context, snapshot);
   CollectBases(plan, finder.bases, false);
   finder.Walk(plan);
+  // Made for the first base that may carry columns; left empty when the plan can't be indexed.
+  std::optional<PlanIndex> index;
+  bool indexed = false;
   for (const auto& [uuid, base] : finder.bases) {
     if (!base.dml || !base.table) continue;
     TriggerBody entry;
@@ -503,11 +1798,83 @@ TriggerBodies FindTriggerBodies(dd::ClientContext& context, const Snapshot& snap
     entry.returning_to_user = base.returning_to_user;
     entry.table = PathOfEntry(*base.table);
     entry.describe = "the statement on table " + entry.table.ToString();
+    // An INSERT scans nothing of its table. A RETURNING of the writer's own hands the
+    // rows back: every column is a read then, as it always was.
+    std::optional<Carried> carried;
+    if (base.cte && !base.returning_to_user && base.dml->type != OpType::LOGICAL_INSERT) {
+      try {
+        if (!indexed) {
+          indexed = true;
+          PlanIndex made;
+          IndexPlan(plan, nullptr, made);
+          index = std::move(made);
+        }
+        if (index) carried = CarriedColumns(context, *index, *base.cte, *base.dml);
+      } catch (...) {
+        carried.reset();  // not a plan this can read: nothing is carried
+      }
+    }
+    if (carried) {
+      // The rows OLD and NEW come from sit under the row triggers' CTE, beside the bodies:
+      // each row trigger's body answers for them. Only where those bodies were found and
+      // nothing scans that CTE; otherwise whoever's rights are in force there answers.
+      auto row_cte = finder.row_ctes.find(uuid);
+      auto row_bodies = finder.row_bodies.find(base.dml);
+      const bool answerable =
+          row_cte != finder.row_ctes.end() && row_cte->second && !row_cte->second->children.empty() &&
+          row_bodies != finder.row_bodies.end() && !row_bodies->second.empty() &&
+          !index->cte_scans.count(row_cte->second->Cast<dd::LogicalMaterializedCTE>().table_index.index);
+      bool beside_bodies = false;
+      for (const dd::LogicalOperator* reader : carried->readers) {
+        bool in_a_body = false;
+        for (const auto& body : finder.bodies) {
+          in_a_body = in_a_body || (!body.base && Within(*index, reader, body.root));
+        }
+        if (answerable && !in_a_body && Within(*index, reader, row_cte->second->children[0].get())) {
+          beside_bodies = true;
+        } else {
+          entry.row_readers.push_back(reader);
+        }
+      }
+      if (beside_bodies) {
+        for (size_t body : row_bodies->second) finder.bodies[body].reads_rows_of = base.dml;
+      }
+      entry.target_scan = carried->scan;
+      entry.read_columns = std::move(carried->read);
+      entry.told_columns = std::move(carried->told);
+      entry.carried_columns = std::move(carried->carried);
+    }
     finder.bodies.push_back(std::move(entry));
   }
   if (definer_exemptions_unverified) {
     for (auto& body : finder.bodies) {
       if (body.definer) body.definer->policy_exemptions_unverified = true;
+    }
+  }
+  // The CTEs from outside a body that it reads ("Names in a body"): only the binder's own
+  // (a base's rows, the place row triggers sit) may be.
+  std::map<dd::idx_t, std::string> cte_names;
+  IndexCtes(plan, cte_names);
+  std::set<dd::idx_t> binders;
+  for (const auto& [uuid, base] : finder.bases) {
+    if (base.cte && base.dml && base.cte->type == OpType::LOGICAL_MATERIALIZED_CTE) {
+      binders.insert(base.cte->Cast<dd::LogicalMaterializedCTE>().table_index.index);
+    }
+  }
+  for (const auto& [uuid, row_cte] : finder.row_ctes) {
+    if (row_cte && row_cte->type == OpType::LOGICAL_MATERIALIZED_CTE) {
+      binders.insert(row_cte->Cast<dd::LogicalMaterializedCTE>().table_index.index);
+    }
+  }
+  for (auto& body : finder.bodies) {
+    if (body.base || !body.root) continue;
+    std::set<dd::idx_t> defined;
+    std::vector<dd::idx_t> read;
+    CteUses(*body.root, finder.bodies, true, defined, read);
+    for (dd::idx_t index : read) {
+      if (defined.count(index) || binders.count(index)) continue;
+      auto name = cte_names.find(index);
+      body.outer_ctes.push_back(name == cte_names.end() ? std::string("(a CTE)") : name->second);
     }
   }
   return std::move(finder.bodies);
@@ -523,6 +1890,666 @@ const TriggerBody* TriggerBodyAt(const TriggerBodies& bodies, const dd::LogicalO
 bool ReturningAddedForTriggers(const TriggerBodies& bodies, const dd::LogicalOperator& op) {
   const TriggerBody* body = TriggerBodyAt(bodies, op);
   return body && body->base && !body->returning_to_user;
+}
+
+std::string TriggerBodyNameProblem(dd::ClientContext& context, const TriggerBodies& bodies, const TriggerBody& body) {
+  const std::string what = body.describe.empty() ? std::string("a trigger") : body.describe;
+  try {
+    if (body.base || !body.root || body.entries.empty()) {
+      return what + " could not be matched to its body, so the names in it can't be checked; ask an administrator";
+    }
+    // A trigger on a session's own temporary table is the session's, names and all.
+    if (IdentifiersEqual(body.table.catalog, TEMP_CATALOG)) return "";
+    NameCheck check(context, body.table, what);
+    // A row trigger's body may be any of several triggers': each one's names are checked.
+    for (const dd::TriggerCatalogEntry* trigger : body.entries) {
+      if (!trigger || !trigger->trigger_action) return what + " has no action to read its names from; ask an administrator";
+      std::set<std::string> aliases;
+      for (const auto& alias : {trigger->referencing_new_table, trigger->referencing_old_table}) {
+        if (!compat::Str(alias).empty()) aliases.insert(FoldIdentifier(compat::Str(alias)));
+      }
+      auto action = trigger->trigger_action->Copy();
+      ActionNames written(aliases);
+      written.Node(*action);
+      auto problem = check.Names(written, "", 0);
+      if (!problem.empty()) return problem;
+    }
+    // A name in the body (or in a macro it calls) bound to a CTE from outside the body: the
+    // firing statement's WITH, or an enclosing trigger body's, stands in for the table the
+    // body means. (DuckDB's own CTEs, which hold the outer rows of a correlated subquery, are
+    // made by its planner, not bound by name: "__duckdb_..." names no SQL in the body says.)
+    for (const auto& cte : body.outer_ctes) {
+      const std::string folded = FoldIdentifier(cte);
+      if (folded.rfind("__duckdb_", 0) == 0 && !check.bare_names.count(folded)) continue;
+      return what + " reads " + QuoteIdentifierIfNeeded(cte) +
+             ", which in this statement is a CTE (WITH) from outside the trigger's body, of the statement that fires "
+             "it or of a trigger's body that does, not the table or view the body means: the statement would not do "
+             "what the trigger is there to do. Give that CTE another name";
+    }
+    // And the plan itself: nothing in it that no name stands for.
+    std::vector<dd::CatalogEntry*> reached;
+    std::vector<dd::TableCatalogEntry*> tables_written;
+    CollectReached(context, *body.root, bodies, true, reached, tables_written);
+    // A written table's column defaults take numbers from sequences no name in the action
+    // stands for: the table's own. DuckDB binds those by name in the statement too, so what
+    // each is for its table is what is meant (and a session's temporary one is not).
+    for (dd::TableCatalogEntry* table : tables_written) {
+      const ObjectPath table_path = PathOfEntry(*table);
+      for (const auto& column : table->GetColumns().Logical()) {
+        if (!column.HasDefaultValue()) continue;
+        auto copy = column.DefaultValue().Copy();
+        ActionNames of_default;
+        of_default.Expression(copy);
+        for (const auto& name : of_default.names) {
+          if (!name.sequence) continue;
+          bool ambiguous = false;
+          auto sequence = ForTheTable(context, dd::CatalogType::SEQUENCE_ENTRY, name.parts, table_path, ambiguous);
+          if (sequence) check.meant.insert(sequence.get());
+        }
+      }
+    }
+    for (dd::CatalogEntry* entry : reached) {
+      if (check.meant.count(entry)) continue;
+      if (entry->internal) continue;
+      const bool temporary = IsTemporary(*entry);
+      return what + " reaches " + (temporary ? "a temporary object of this session" : "an object") + " named " +
+             QuoteIdentifierIfNeeded(compat::Str(entry->name)) +
+             " that none of the names in its body or in the macros it calls stands for, for the trigger's own table "
+             "(a table's default, or this session's search path): the statement is refused rather than guessed at" +
+             (temporary ? ". Drop or rename the temporary object to write this table" : "");
+    }
+    return "";
+  } catch (...) {
+    return what + " has names in its body that could not be checked against this session; ask an administrator";
+  }
+}
+
+std::string QualifyTriggerNames(dd::ClientContext& context, const ObjectPath& table, dd::CreateTriggerInfo& info) {
+  if (!info.trigger_action || info.temporary || IdentifiersEqual(table.catalog, TEMP_CATALOG)) return "";
+  const std::string what = "trigger " + QuoteIdentifierIfNeeded(compat::Str(info.GetTriggerName()));
+  std::set<std::string> aliases;
+  for (const auto& alias : {info.referencing_new_table, info.referencing_old_table}) {
+    if (!compat::Str(alias).empty()) aliases.insert(FoldIdentifier(compat::Str(alias)));
+  }
+  ActionNames written(aliases);
+  try {
+    // (On a copy first: a walk that gives up halfway must leave the action as it was.)
+    auto copy = info.trigger_action->Copy();
+    ActionNames trial(aliases);
+    trial.Node(*copy);
+    written.Node(*info.trigger_action);
+  } catch (...) {
+    return "the action of " + what + " could not be read to the end, so it can't be stored with its tables' schemas";
+  }
+  // What could never be checked when the trigger fires: it would fire for no one but an
+  // administrator.
+  if (written.unreadable_sequence) {
+    return what + " takes a sequence's numbers by a name that is not a plain string: name the sequence as one "
+                  "(nextval('schema.name')), so that what it is can be checked when the trigger fires";
+  }
+  if (written.unreadable_table) {
+    return what + " reads a table through query() or query_table() with something other than one table's name as a "
+                  "plain string: name the table itself in the action, so that what it is can be checked when the "
+                  "trigger fires";
+  }
+  for (auto& name : written.names) {
+    if (name.cte) continue;  // a CTE's or a transition table's, where it stands
+    const auto type = name.sequence ? dd::CatalogType::SEQUENCE_ENTRY : dd::CatalogType::TABLE_ENTRY;
+    dd::optional_ptr<dd::CatalogEntry> entry;
+    try {
+      entry = InThisSession(context, type, name.parts);
+    } catch (const std::exception&) {
+      continue;  // DuckDB has bound the action already: not a name of an object, then
+    }
+    // DuckDB lets an action name objects of its table's own catalog only (its own aside).
+    if (!entry || entry->internal || IsTemporary(*entry)) continue;
+    const ObjectPath path = PathOfEntry(*entry);
+    if (!IdentifiersEqual(path.catalog, table.catalog) || path.schema_path.empty()) continue;
+    // With its schema, not its catalog: a database file renamed, or attached under another
+    // name, keeps its triggers working.
+    if (name.constant) {
+      std::string text;
+      for (const auto& part : path.schema_path) text += (text.empty() ? "" : ".") + QuoteIdentifierIfNeeded(part);
+      text += "." + QuoteIdentifierIfNeeded(path.object_name);
+      *name.constant = dd::ConstantExpression::FromValue(dd::Value(text));
+      continue;
+    }
+    dd::vector<dd::Identifier> schema;
+    for (const auto& part : path.schema_path) schema.emplace_back(part);
+    dd::QualifiedName qualified(std::move(schema), dd::Identifier(path.object_name));
+    if (name.insert) name.insert->qualified_name = qualified;
+    if (name.ref) name.ref->SetQualifiedName(qualified);
+  }
+  // The macros (and table macros) it calls, given their schema too: the body is bound under its
+  // table's name scope (name_scope.hpp), which finds a bare name in the table's own schema
+  // only. A convenience: what is left as written is found under the scope or refused
+  // (TriggerStoredNamesProblem says so at once), never looked up in a writer's session.
+  for (auto& function : written.functions) {
+    if (!function.call || function.parts.empty() || function.parts.size() > 2) continue;
+    const auto type = function.table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : dd::CatalogType::SCALAR_FUNCTION_ENTRY;
+    dd::optional_ptr<dd::CatalogEntry> entry;
+    try {
+      entry = InThisSession(context, type, function.parts);
+    } catch (const std::exception&) {
+      continue;
+    }
+    if (!entry || entry->internal || IsDuckDbsOwn(*entry) || IsTemporary(*entry)) continue;
+    if (entry->type != dd::CatalogType::MACRO_ENTRY && entry->type != dd::CatalogType::TABLE_MACRO_ENTRY) continue;
+    const ObjectPath path = PathOfEntry(*entry);
+    if (!IdentifiersEqual(path.catalog, table.catalog) || path.schema_path.empty()) continue;
+    dd::vector<dd::Identifier> schema;
+    for (const auto& part : path.schema_path) schema.emplace_back(part);
+    function.call->SetQualifiedName(dd::QualifiedName(std::move(schema), dd::Identifier(path.object_name)));
+  }
+  return "";
+}
+
+namespace {
+// A scalar function call, as written, to a macro of this session's: given its schema.
+void QualifyMacroCalls(dd::ClientContext& context, const std::string& catalog, dd::ParsedExpression& expression,
+                       int depth) {
+  if (depth > 200) throw dd::InternalException("an expression is nested too deeply to read");
+  if (expression.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
+    auto& function = expression.Cast<dd::FunctionExpression>();
+    std::vector<std::string> parts;
+    for (const auto& part : function.GetQualifiedName().Path()) {
+      if (!compat::Str(part).empty()) parts.push_back(compat::Str(part));
+    }
+    if (!parts.empty() && parts.size() < 3) {
+      dd::optional_ptr<dd::CatalogEntry> entry;
+      try {
+        entry = InThisSession(context, dd::CatalogType::SCALAR_FUNCTION_ENTRY, parts);
+      } catch (...) {
+      }
+      if (entry && !entry->internal && entry->type == dd::CatalogType::MACRO_ENTRY && !IsTemporary(*entry)) {
+        const ObjectPath path = PathOfEntry(*entry);
+        if (IdentifiersEqual(path.catalog, catalog) && !path.schema_path.empty()) {
+          dd::vector<dd::Identifier> schema;
+          for (const auto& part : path.schema_path) schema.emplace_back(part);
+          function.SetQualifiedName(dd::QualifiedName(std::move(schema), dd::Identifier(path.object_name)));
+        }
+      }
+    }
+  }
+  dd::ParsedExpressionIterator::EnumerateChildren(expression, [&](dd::ParsedExpression& child) {
+    QualifyMacroCalls(context, catalog, child, depth + 1);
+  });
+}
+}  // namespace
+
+void QualifyTableExpression(dd::ClientContext& context, const std::string& catalog,
+                            dd::unique_ptr<dd::ParsedExpression>& expression) {
+  if (!expression || IdentifiersEqual(catalog, TEMP_CATALOG)) return;
+  try {
+    auto copy = expression->Copy();
+    QualifyMacroCalls(context, catalog, *copy, 0);
+    expression = std::move(copy);
+  } catch (...) {
+    // left as written: held against each session where it is bound
+  }
+}
+
+void QualifyTableExpressions(dd::ClientContext& context, const std::string& catalog, dd::CreateTableInfo& info) {
+  if (IdentifiersEqual(catalog, TEMP_CATALOG) || info.temporary) return;
+  for (auto& constraint : info.constraints) {
+    if (constraint && constraint->type == dd::ConstraintType::CHECK) {
+      QualifyTableExpression(context, catalog, constraint->Cast<dd::CheckConstraint>().expression);
+    }
+  }
+  for (dd::idx_t i = 0; i < info.columns.LogicalColumnCount(); ++i) {
+    auto& column = info.columns.GetColumnMutable(dd::LogicalIndex(i));
+    if (!column.Generated()) continue;
+    auto copy = column.GeneratedExpression().Copy();
+    QualifyTableExpression(context, catalog, copy);
+    column.SetGeneratedExpression(std::move(copy));
+  }
+  for (dd::idx_t i = 0; i < info.columns.LogicalColumnCount(); ++i) {
+    auto& column = info.columns.GetColumnMutable(dd::LogicalIndex(i));
+    if (column.Generated() || !column.HasDefaultValue()) continue;
+    auto copy = column.DefaultValue().Copy();
+    QualifyTableExpression(context, catalog, copy);
+    column.SetDefaultValue(std::move(copy));
+  }
+}
+
+void QualifyIndexExpressions(dd::ClientContext& context, const std::string& catalog, dd::CreateIndexInfo& info) {
+  if (IdentifiersEqual(catalog, TEMP_CATALOG) || info.temporary) return;
+  // parsed_expressions is what the index keeps and is bound from again after a start.
+  for (auto* list : {&info.parsed_expressions, &info.expressions}) {
+    for (auto& expression : *list) QualifyTableExpression(context, catalog, expression);
+  }
+}
+
+namespace {
+
+// How many macros (or types) of this name a catalog has, in any schema.
+size_t CountNamed(dd::ClientContext& context, dd::Catalog& catalog, dd::CatalogType type, const std::string& name,
+                  std::vector<std::string>& where) {
+  size_t count = 0;
+  const std::string catalog_name = compat::Str(catalog.GetName());
+  for (auto& found : catalog.GetSchemas(context)) {
+    const ObjectPath schema = PathOfEntry(found.get());
+    auto entry = EntryAt(context, type, catalog_name, schema.schema_path, name);
+    if (!entry || entry->internal) continue;
+    ++count;
+    where.push_back(schema.ToString());
+  }
+  return count;
+}
+
+}  // namespace
+
+std::string IndexExpressionProblem(dd::ClientContext& context, dd::TableCatalogEntry& table) {
+  try {
+    if (!table.IsDuckTable() || !table.GetStorage().HasIndexes()) return "";
+    const ObjectPath path = PathOfEntry(table);
+    if (IdentifiersEqual(path.catalog, TEMP_CATALOG)) return "";
+    // The schema's index entries first, then their expressions, outside the scan's callback.
+    std::vector<dd::reference<dd::IndexCatalogEntry>> indexes;
+    table.ParentSchema().Scan(context, dd::CatalogType::INDEX_ENTRY, [&](dd::CatalogEntry& entry) {
+      if (entry.type != dd::CatalogType::INDEX_ENTRY) return;
+      auto& index = entry.Cast<dd::IndexCatalogEntry>();
+      if (IdentifiersEqual(compat::Str(index.GetTableName()), path.object_name)) indexes.push_back(index);
+    });
+    for (auto& found : indexes) {
+      auto& index = found.get();
+      if (index.parsed_expressions.empty()) continue;  // an index over plain columns
+      ActionNames names;
+      for (const auto& expression : index.parsed_expressions) {
+        if (!expression) continue;
+        auto copy = expression->Copy();
+        names.Expression(copy);
+      }
+      const std::string what = "index " + QuoteIdentifierIfNeeded(compat::Str(index.name)) + " on table " + path.ToString();
+      const std::string mend = ". Drop the index and create it again (DROP INDEX, then CREATE INDEX, which stores the "
+                               "macros and types it names with their schema)";
+      auto problem = [&](dd::CatalogType type, const std::vector<std::string>& parts, const char* noun,
+                         const char* verb) -> std::string {
+        dd::optional_ptr<dd::CatalogEntry> under_scope;
+        try {
+          under_scope = FindUnderScope(context, type, path.catalog, path.schema_path, parts);
+        } catch (const std::exception&) {
+        }
+        if (under_scope && (under_scope->internal || IsDuckDbsOwn(*under_scope))) return "";
+        if (parts.size() > 1) {
+          if (under_scope) return "";  // named with its schema: that one, for every session
+          // value.f(): DuckDB's own functions only (name_scope.hpp).
+          dd::optional_ptr<dd::CatalogEntry> method;
+          try {
+            method = FindUnderScope(context, type, path.catalog, path.schema_path, {parts.back()});
+          } catch (const std::exception&) {
+          }
+          if (type != dd::CatalogType::TYPE_ENTRY && method && (method->internal || IsDuckDbsOwn(*method))) return "";
+          return what + " " + verb + " " + noun + " " + Written(parts) + ", which is not found where an index's "
+                 "expression is looked up (that schema of the table's own database; a macro is never called as "
+                 "value.function())" + mend;
+        }
+        std::vector<std::string> where;
+        const size_t named = CountNamed(context, table.ParentCatalog(), type, parts[0], where);
+        if (named == 0) return "";  // no macro (or type) of that name anywhere: not a name of one
+        std::string places;
+        for (const auto& place : where) places += (places.empty() ? "" : ", ") + place;
+        if (!under_scope) {
+          return what + " " + verb + " " + noun + " " + Written(parts) + " without its schema, and it is in neither the "
+                 "table's own schema nor main of its database (it is in " + places + "), where an index's expression "
+                 "is looked up whatever the session" + mend;
+        }
+        if (named > 1) {
+          return what + " " + verb + " " + noun + " " + Written(parts) + " without its schema, and catalog " +
+                 QuoteIdentifierIfNeeded(path.catalog) + " has " + std::to_string(named) + " of that name (in " + places +
+                 "): which one the index's entries were computed with is not on record, and an index kept with "
+                 "another one would be wrong, so the table is not read or written until that is settled" + mend +
+                 ", naming the one meant";
+        }
+        return "";
+      };
+      for (const auto& type_name : names.types) {
+        if (auto text = problem(dd::CatalogType::TYPE_ENTRY, type_name, "type", "names"); !text.empty()) return text;
+      }
+      for (const auto& function : names.functions) {
+        if (function.table) continue;
+        if (auto text = problem(dd::CatalogType::SCALAR_FUNCTION_ENTRY, function.parts, "macro", "calls"); !text.empty()) {
+          return text;
+        }
+      }
+    }
+    return "";
+  } catch (const std::exception&) {
+    return "";  // not read here: the index is bound under its table's name scope all the same
+  }
+}
+
+namespace {
+void CollectUsedTables(const dd::LogicalOperator& op, std::vector<dd::TableCatalogEntry*>& tables, bool& checkpoint) {
+  dd::TableCatalogEntry* table = WrittenTable(op);
+  if (!table && op.type == OpType::LOGICAL_GET) {
+    auto& get = op.Cast<dd::LogicalGet>();
+    if (auto scanned = get.GetTable()) {
+      table = scanned.get();
+    } else {
+      const std::string function = FoldIdentifier(compat::Str(get.function.GetName()));
+      checkpoint = checkpoint || function == "checkpoint" || function == "force_checkpoint";
+    }
+  }
+  if (table && std::find(tables.begin(), tables.end(), table) == tables.end()) tables.push_back(table);
+  for (const auto& child : op.children) {
+    if (child) CollectUsedTables(*child, tables, checkpoint);
+  }
+}
+}  // namespace
+
+std::string StatementIndexProblem(dd::ClientContext& context, const dd::LogicalOperator& plan) {
+  std::vector<dd::TableCatalogEntry*> tables;
+  bool checkpoint = false;
+  CollectUsedTables(plan, tables, checkpoint);
+  for (dd::TableCatalogEntry* table : tables) {
+    if (auto problem = IndexExpressionProblem(context, *table); !problem.empty()) return problem;
+  }
+  if (!checkpoint) return "";
+  // CHECKPOINT (the statement) binds every index of every table before it writes them, and
+  // DuckDB invalidates the database when one cannot be bound: the same question, for them all.
+  try {
+    std::vector<dd::reference<dd::TableCatalogEntry>> every;
+    for (const auto& database : dd::DatabaseManager::Get(context).GetDatabases(context)) {
+      if (!database || database->IsSystem() || database->IsTemporary()) continue;
+      auto& catalog = database->GetCatalog();
+      if (!catalog.IsDuckCatalog()) continue;
+      for (auto& found : catalog.GetSchemas(context)) {
+        found.get().Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
+          if (entry.type == dd::CatalogType::TABLE_ENTRY) every.push_back(entry.Cast<dd::TableCatalogEntry>());
+        });
+      }
+    }
+    for (auto& table : every) {
+      if (auto problem = IndexExpressionProblem(context, table.get()); !problem.empty()) {
+        return "CHECKPOINT binds every index, and " + problem;
+      }
+    }
+  } catch (const std::exception&) {
+  }
+  return "";
+}
+
+namespace {
+
+// Definition time (name_scope.hpp): the functions, macros and types `written` names, as this
+// session (the definer's) finds them, against what the stored expression's scope will find
+// when it is bound. Looks into the macros it calls, whose bodies are bound under the same
+// scope. Only what the session finds that is not DuckDB's own is compared: a name DuckDB
+// itself did not bind to a catalog entry (unnest, a lambda's parameter) is not a name.
+std::string ScopeProblem(dd::ClientContext& context, const std::string& catalog,
+                         const std::vector<std::string>& schema_path, const std::string& what, ActionNames& written,
+                         const std::string& macro, int depth, std::set<const dd::CatalogEntry*>& seen) {
+  ObjectPath scope{catalog, schema_path, {}};
+  const std::string where = macro.empty() ? "" : " calls macro " + macro + ", which";
+  const std::string fix = macro.empty() ? std::string("name it with its schema (schema.name)")
+                                        : "name it with its schema (schema.name) in macro " + macro;
+  auto in_session = [&](dd::CatalogType type, const std::vector<std::string>& parts) {
+    dd::optional_ptr<dd::CatalogEntry> entry;
+    try {
+      entry = InThisSession(context, type, parts);
+    } catch (const std::exception&) {
+    }
+    return entry;
+  };
+  auto under_scope = [&](dd::CatalogType type, const std::vector<std::string>& parts) {
+    dd::optional_ptr<dd::CatalogEntry> entry;
+    try {
+      entry = FindUnderScope(context, type, catalog, schema_path, parts);
+    } catch (const std::exception&) {
+    }
+    return entry;
+  };
+  // schema.name: what to write (never the catalog: a renamed database keeps its objects).
+  auto with_schema = [](dd::CatalogEntry& entry) {
+    ObjectPath path = PathOfEntry(entry);
+    path.catalog.clear();
+    std::string text;
+    for (const auto& part : path.schema_path) text += QuoteIdentifierIfNeeded(part) + ".";
+    return text + QuoteIdentifierIfNeeded(path.object_name);
+  };
+  auto mismatch = [&](const std::string& noun, const std::string& verb, const std::vector<std::string>& parts,
+                      dd::CatalogEntry& here, dd::optional_ptr<dd::CatalogEntry> there) {
+    return what + where + " " + verb + " " + noun + " " + Written(parts) + ", which is " +
+           (IsTemporary(here) ? std::string("a temporary one of this session") : PathOfEntry(here).ToString()) +
+           " in this session but " +
+           (there ? "would be " + PathOfEntry(*there).ToString() : std::string("would not be found")) + " where " +
+           what + " is evaluated: there a name is looked up in " + scope.ToString() + ", then in schema main of catalog " +
+           QuoteIdentifierIfNeeded(catalog) + " and among DuckDB's own, and a name with a schema in that schema of catalog " +
+           QuoteIdentifierIfNeeded(catalog) + ", whatever the session's search path. " +
+           (IsTemporary(here) ? std::string("It cannot use a temporary ") + noun
+                              : "So that it means the same for everyone, " + fix + ": " + with_schema(here));
+  };
+  for (const auto& type_name : written.types) {
+    auto here = in_session(dd::CatalogType::TYPE_ENTRY, type_name);
+    if (!here || here->internal || IsDuckDbsOwn(*here)) continue;
+    auto there = under_scope(dd::CatalogType::TYPE_ENTRY, type_name);
+    if (there.get() != here.get()) return mismatch("type", "names", type_name, *here, there);
+  }
+  for (const auto& function : written.functions) {
+    const auto type = function.table ? dd::CatalogType::TABLE_FUNCTION_ENTRY : dd::CatalogType::SCALAR_FUNCTION_ENTRY;
+    auto here = in_session(type, function.parts);
+    bool method = false;
+    if (!here && function.parts.size() >= 2 && !function.table) {
+      // DuckDB reads value.f() as f(value) when no schema of that name has an f.
+      here = in_session(type, {function.parts.back()});
+      method = here != nullptr;
+    }
+    if (!here || here->internal || IsDuckDbsOwn(*here)) continue;
+    if (method) {
+      return what + where + " calls " + Written(function.parts) + ", a method-style call (value.function()) of " +
+             PathOfEntry(*here).ToString() + ". Where " + what + " is evaluated only DuckDB's own functions can be "
+             "called that way (so that no session's macro of that name is ever taken for it): write it as " +
+             with_schema(*here) + "(value)";
+    }
+    auto there = under_scope(type, function.parts);
+    if (there.get() != here.get()) {
+      return mismatch(function.table ? "table function" : "function", "calls", function.parts, *here, there);
+    }
+    if (here->type != dd::CatalogType::MACRO_ENTRY && here->type != dd::CatalogType::TABLE_MACRO_ENTRY) continue;
+    if (!seen.insert(here.get()).second) continue;
+    if (depth >= 16) return what + " calls macros nested too deeply to check; ask an administrator";
+    ActionNames inside;
+    MacroNames(here->Cast<dd::MacroCatalogEntry>(), inside);
+    auto problem = ScopeProblem(context, catalog, schema_path, what, inside,
+                                QuoteIdentifierIfNeeded(compat::Str(here->name)), depth + 1, seen);
+    if (!problem.empty()) return problem;
+  }
+  return "";
+}
+
+}  // namespace
+
+std::string StoredNamesProblem(dd::ClientContext& context, const std::string& catalog,
+                               const std::vector<std::string>& schema_path, const std::string& what,
+                               const dd::QueryNode* node, const std::vector<const dd::ParsedExpression*>& expressions,
+                               const std::set<std::string>& aliases) {
+  if (catalog.empty() || schema_path.empty() || IdentifiersEqual(catalog, TEMP_CATALOG)) return "";
+  try {
+    ActionNames written(aliases);
+    if (node) {
+      auto copy = node->Copy();
+      written.Node(*copy);
+    }
+    for (const dd::ParsedExpression* expression : expressions) {
+      if (!expression) continue;
+      auto copy = expression->Copy();
+      written.Expression(copy);
+    }
+    std::set<const dd::CatalogEntry*> seen;
+    return ScopeProblem(context, catalog, schema_path, what, written, "", 0, seen);
+  } catch (const std::exception&) {
+    // SQL this can't read to the end: the binder holds it where it is bound.
+    return "";
+  }
+}
+
+std::string TableStoredNamesProblem(dd::ClientContext& context, const ObjectPath& table, const dd::CreateTableInfo& info) {
+  if (info.temporary) return "";
+  std::vector<const dd::ParsedExpression*> expressions;
+  for (const auto& constraint : info.constraints) {
+    if (constraint && constraint->type == dd::ConstraintType::CHECK) {
+      expressions.push_back(constraint->Cast<dd::CheckConstraint>().expression.get());
+    }
+  }
+  for (const auto& column : info.columns.Logical()) {
+    if (column.Generated()) {
+      expressions.push_back(&column.GeneratedExpression());
+    } else if (column.HasDefaultValue()) {
+      expressions.push_back(&column.DefaultValue());
+    }
+  }
+  return StoredNamesProblem(context, table.catalog, table.schema_path,
+                            "a CHECK constraint, generated column or column default of table " + table.ToString(), nullptr,
+                            expressions);
+}
+
+std::string TriggerStoredNamesProblem(dd::ClientContext& context, const ObjectPath& table,
+                                      const dd::CreateTriggerInfo& info) {
+  if (!info.trigger_action || info.temporary) return "";
+  std::set<std::string> aliases;
+  for (const auto& alias : {info.referencing_new_table, info.referencing_old_table}) {
+    if (!compat::Str(alias).empty()) aliases.insert(FoldIdentifier(compat::Str(alias)));
+  }
+  return StoredNamesProblem(context, table.catalog, table.schema_path,
+                            "trigger " + QuoteIdentifierIfNeeded(compat::Str(info.GetTriggerName())) + " on table " +
+                                table.ToString(),
+                            info.trigger_action.get(), {}, aliases);
+}
+
+// A type named in a cast that is one of DuckDB's own (in the system catalog), nested ones too.
+bool BuiltInType(dd::ClientContext& context, const dd::ParsedExpression& expression, int depth) {
+  if (depth > 50 || expression.GetExpressionClass() != dd::ExpressionClass::TYPE) return depth > 0;
+  auto& type = expression.Cast<dd::TypeExpression>();
+  if (!compat::Str(type.GetCatalog()).empty() || !compat::Str(type.GetSchema()).empty()) return false;
+  auto entry = EntryAt(context, dd::CatalogType::TYPE_ENTRY, "system", {DEFAULT_SCHEMA}, compat::Str(type.GetTypeName()));
+  if (!entry || !entry->internal) return false;
+  for (const auto& child : type.GetChildren()) {
+    if (child && child->GetExpressionClass() == dd::ExpressionClass::TYPE && !BuiltInType(context, *child, depth + 1)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool UsesOnlyBuiltIns(dd::ClientContext& context, const dd::ParsedExpression& expression) {
+  bool only = true;
+  std::function<void(const dd::ParsedExpression&, int)> walk = [&](const dd::ParsedExpression& e, int depth) {
+    if (!only) return;
+    if (depth > 200) {
+      only = false;
+      return;
+    }
+    if (e.GetExpressionClass() == dd::ExpressionClass::FUNCTION) {
+      std::vector<std::string> parts;
+      for (const auto& part : e.Cast<dd::FunctionExpression>().GetQualifiedName().Path()) {
+        if (!compat::Str(part).empty()) parts.push_back(compat::Str(part));
+      }
+      dd::optional_ptr<dd::CatalogEntry> entry;
+      try {
+        entry = InThisSession(context, dd::CatalogType::SCALAR_FUNCTION_ENTRY, parts);
+      } catch (...) {
+      }
+      if (!entry || !entry->internal || entry->type == dd::CatalogType::MACRO_ENTRY) only = false;
+    } else if (e.GetExpressionClass() == dd::ExpressionClass::CAST) {
+      const auto& target = e.Cast<dd::CastExpression>().GetTargetType();
+      if (!target || !BuiltInType(context, *target, 0)) only = false;
+    } else if (e.GetExpressionClass() == dd::ExpressionClass::SUBQUERY) {
+      only = false;
+    }
+    dd::ParsedExpressionIterator::EnumerateChildren(e, [&](const dd::ParsedExpression& child) { walk(child, depth + 1); });
+  };
+  walk(expression, 0);
+  return only;
+}
+
+std::optional<std::string> TriggerNameRefusal(dd::ClientContext& context, const ObjectPath& path) {
+  if (path.schema_path.empty() || IdentifiersEqual(path.catalog, TEMP_CATALOG)) return std::nullopt;
+  const std::string name = FoldIdentifier(path.object_name);
+  const bool in_main = path.schema_path.size() == 1 && IdentifiersEqual(path.schema_path[0], DEFAULT_SCHEMA);
+  const std::vector<std::string> main_schema{DEFAULT_SCHEMA};
+  // Only DuckDB's own catalogs keep triggers. (A catalog that is not there: DuckDB says so.)
+  auto found_catalog = dd::Catalog::GetCatalogEntry(context, dd::Identifier(path.catalog));
+  if (!found_catalog || !found_catalog->IsDuckCatalog()) return std::nullopt;
+  try {
+    auto& catalog = *found_catalog;
+    // The tables first, then each one's triggers, outside the schema scans' callbacks (lock
+    // order: see SequenceNameRefusal).
+    std::vector<dd::reference<dd::TableCatalogEntry>> tables;
+    for (auto& found : catalog.GetSchemas(context)) {
+      found.get().Scan(context, dd::CatalogType::TABLE_ENTRY, [&](dd::CatalogEntry& entry) {
+        if (entry.type == dd::CatalogType::TABLE_ENTRY) tables.push_back(entry.Cast<dd::TableCatalogEntry>());
+      });
+    }
+    for (auto& table : tables) {
+      const ObjectPath table_path = PathOfEntry(table.get());
+      // Would `path` be one of two objects named like a bare name of a trigger on this table?
+      const bool table_in_main = table_path.schema_path.size() == 1 && IdentifiersEqual(table_path.schema_path[0], DEFAULT_SCHEMA);
+      if (table_in_main) continue;  // its schema is main: one place, never two
+      std::vector<std::string> other;
+      if (in_main) {
+        other = table_path.schema_path;
+      } else if (path.schema_path.size() == table_path.schema_path.size() &&
+                 std::equal(path.schema_path.begin(), path.schema_path.end(), table_path.schema_path.begin(),
+                            [](const std::string& a, const std::string& b) { return IdentifiersEqual(a, b); })) {
+        other = main_schema;
+      } else {
+        continue;
+      }
+      if (!EntryAt(context, dd::CatalogType::TABLE_ENTRY, table_path.catalog, other, path.object_name)) continue;
+      std::vector<const dd::TriggerCatalogEntry*> triggers;
+      auto txn = table.get().ParentCatalog().GetCatalogTransaction(context);
+      table.get().ScanTriggers(txn, [&](dd::CatalogEntry& trigger) {
+        if (trigger.type == dd::CatalogType::TRIGGER_ENTRY) triggers.push_back(&trigger.Cast<dd::TriggerCatalogEntry>());
+      });
+      for (const dd::TriggerCatalogEntry* trigger : triggers) {
+        if (!trigger->trigger_action) continue;
+        std::set<std::string> aliases;
+        for (const auto& alias : {trigger->referencing_new_table, trigger->referencing_old_table}) {
+          if (!compat::Str(alias).empty()) aliases.insert(FoldIdentifier(compat::Str(alias)));
+        }
+        auto action = trigger->trigger_action->Copy();
+        ActionNames written(aliases);
+        written.Node(*action);
+        for (const auto& named : written.names) {
+          if (named.sequence || named.cte || named.parts.size() != 1 || FoldIdentifier(named.parts[0]) != name) continue;
+          return "a table or view named " + QuoteIdentifierIfNeeded(path.object_name) + " in schema " +
+                 QuoteIdentifierIfNeeded(path.schema_path.back()) + " would make a trigger of catalog " +
+                 QuoteIdentifierIfNeeded(path.catalog) + " that names it without its schema find one in both its "
+                 "table's schema and main, and refuse every writer; only the administrator may create it (or the "
+                 "trigger's owner can first name it with its schema with CREATE OR REPLACE TRIGGER)";
+        }
+      }
+    }
+  } catch (...) {
+    return "a table or view named " + QuoteIdentifierIfNeeded(path.object_name) +
+           " could not be checked against the triggers of its catalog; ask an administrator";
+  }
+  return std::nullopt;
+}
+
+const TriggerBody* BaseScannedBy(const TriggerBodies& bodies, const dd::LogicalOperator& scan) {
+  for (const auto& body : bodies) {
+    if (body.base && body.target_scan == &scan) return &body;
+  }
+  return nullptr;
+}
+
+const TriggerBody* BaseWriting(const TriggerBodies& bodies, const dd::TableCatalogEntry& table) {
+  for (const auto& body : bodies) {
+    if (!body.base || body.returning_to_user || !body.root || body.root->type == OpType::LOGICAL_INSERT) continue;
+    if (WrittenTable(*body.root) == &table) return &body;
+  }
+  return nullptr;
+}
+
+const TriggerBody* BaseReadBy(const TriggerBodies& bodies, const dd::LogicalOperator& scan) {
+  for (const auto& body : bodies) {
+    if (body.base && std::find(body.row_readers.begin(), body.row_readers.end(), &scan) != body.row_readers.end()) {
+      return &body;
+    }
+  }
+  return nullptr;
 }
 
 bool HasDefinerBody(const TriggerBodies& bodies) {

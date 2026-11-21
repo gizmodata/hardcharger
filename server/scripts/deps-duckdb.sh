@@ -142,6 +142,8 @@ mkdir -p "$CHARGEWIRE_DEPS_DIR/duckdb-install/share"
 "$HERE/scripts/cpu-target.sh" > "$CHARGEWIRE_DEPS_DIR/duckdb-install/share/hardcharger-cpu-target"
 grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
+grep -q hardcharger_scoped_lookup_hook "$SRC/src/catalog/catalog.cpp" \
+  || { echo "DuckDB lost the name scope patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
   || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
 grep -q next_update_ms "$SRC/src/common/progress_bar/progress_bar.cpp" \

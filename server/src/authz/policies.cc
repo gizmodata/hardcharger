@@ -43,6 +43,7 @@
 
 #include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
+#include "authz/name_scope.hpp"
 #include "authz/resolver.hpp"
 #include "authz/views.hpp"
 
@@ -747,8 +748,11 @@ class PolicyRewriter {
     if (policies.empty() && masks.empty()) return;
 
     // Bind policy SQL against this scan, as DuckDB's binder would: column
-    // references resolve to the scan's columns (and add any it lacks).
+    // references resolve to the scan's columns (and add any it lacks). Its functions and
+    // types are found under the policy's name scope (name_scope.hpp), never through the
+    // reader's search path: a policy computes the same thing for every reader.
     auto binder = dd::Binder::CreateBinder(context_);
+    binder->EntryRetriever().SetNameScope(PolicyNameScope(context_, *table));
     auto& column_ids = get.GetMutableColumnIds();
     const size_t original_columns = column_ids.size();
     const std::string alias = compat::Str(table->name);

@@ -1,4 +1,5 @@
 #include "authz/resolver.hpp"
+#include "authz/triggers.hpp"
 
 #include <openssl/evp.h>
 
@@ -359,6 +360,23 @@ arrow::Status TryPrepare(dd::Connection& connection, const std::string& sql,
   return arrow::Status::OK();
 }
 
+// A policy on `table` is bound under its name scope, schema main of the table's catalog
+// (name_scope.hpp): refuse one whose functions and types are, in this session, something that
+// scope will not find, saying what to write.
+arrow::Status PolicyNames(dd::Connection& connection, const ObjectPath& table, const std::string& what,
+                          const dd::ParsedExpression& expression) {
+  std::string problem;
+  try {
+    connection.context->RunFunctionInTransaction([&] {
+      problem = StoredNamesProblem(*connection.context, table.catalog, {DEFAULT_SCHEMA}, what, nullptr, {&expression});
+    });
+  } catch (const std::exception&) {
+    return arrow::Status::OK();  // not checked here: the binder holds it where the policy is applied
+  }
+  if (problem.empty()) return arrow::Status::OK();
+  return arrow::Status::Invalid("Hardcharger access control: " + problem);
+}
+
 arrow::Result<dd::unique_ptr<dd::ParsedExpression>> ParseSql(const std::string& sql) {
   try {
     auto parser = compat::StandaloneParser();
@@ -375,6 +393,7 @@ arrow::Result<dd::unique_ptr<dd::ParsedExpression>> ParseSql(const std::string& 
 arrow::Status SessionObjectResolver::CheckRowPredicate(const ResolvedObject& table,
                                                        const std::string& predicate) {
   ARROW_ASSIGN_OR_RAISE(auto parsed, PreparePolicyExpression(predicate, TrialContext()));
+  ARROW_RETURN_NOT_OK(PolicyNames(connection_, table.path, "the row policy on table " + table.path.ToString(), *parsed));
   return TryPrepare(connection_,
                     "SELECT count(*) FROM " + table.path.ToString() + " WHERE (" +
                         compat::Str(parsed->ToString()) + ")",
@@ -405,6 +424,8 @@ arrow::Status SessionObjectResolver::CheckMaskBinding(const ResolvedObject& tabl
                         ParseSql("CAST(" + quoted + " AS " + policy.parameter_type + ")"));
   ARROW_ASSIGN_OR_RAISE(auto parsed, PreparePolicyExpression(policy.body, TrialContext(),
                                                              policy.parameter, value.get()));
+  ARROW_RETURN_NOT_OK(PolicyNames(connection_, table.path,
+                                  "masking policy " + policy.name + " on table " + table.path.ToString(), *parsed));
   return TryPrepare(
       connection_,
       "SELECT CAST(CAST((" + compat::Str(parsed->ToString()) + ") AS " + policy.return_type +

@@ -1528,11 +1528,114 @@ triggers of its own fires them, each body with its own owner's rights, and an ad
 trigger fired that way runs with the rights of the body that fired it. `INSERT ... ON CONFLICT`
 (and `INSERT OR IGNORE` / `OR REPLACE`) fires a table's `INSERT` triggers like any insert.
 
+DuckDB keeps a trigger's action as it was written and looks its names up again in every statement
+that fires the trigger, in the writer's session: a table, view or sequence the action names
+without its catalog follows the writer's current catalog and search path, the writer's temporary
+objects first, and a bare name is taken by a `WITH` of the firing statement before the catalog.
+Under access control a trigger does not depend on that:
+
+- `CREATE [OR REPLACE] TRIGGER` stores the action with its tables, views and sequences named with
+  their schema, as the creator's session resolves them (`duckdb_triggers()` shows
+  `INSERT INTO main.audit_log ...`), in a session and in the init SQL alike. The catalog is left
+  out, so renaming a database file, or attaching one under another name, leaves its triggers
+  working. An action that names a sequence (`nextval`) or a `query_table()` table by anything but a
+  plain string is refused, since what it names could not be checked when the trigger fires.
+- When a trigger fires, each name in its action, and in the macros its action calls, must be, in
+  the writer's session, the object it is for the trigger's own table (the schema it gives, in that
+  table's catalog; a bare name in the table's own schema, else in `main`), and no `WITH` from
+  outside the trigger's body may stand in for a table or view the body reads. Otherwise the write
+  is refused, saying which trigger and which name, and what to do: drop a temporary object of that
+  name (the temporary catalog's schema is `main`, so a temporary `audit_log` is found before
+  `main.audit_log`), `USE` the trigger table's database (a trigger on an attached database's table
+  fires for sessions in that database), or give a `WITH` another name. A user's trigger fired by an
+  administrator is held to this too; an administrator's own trigger fired by an administrator is
+  not.
+- A trigger made by an earlier Hardcharger (2.13.1 and before), or one that was already in a
+  database file, still has its names as written, and keeps firing wherever they resolve to the
+  objects for its table. Refused for every writer but an administrator, until the trigger's owner
+  runs `CREATE OR REPLACE TRIGGER` once (with the same text, which then stores the names with their
+  schema): a bare name that is in both the table's schema and `main`, and one that only the
+  creator's own search path found. Only an administrator may create a table or view that would put
+  a bare name a trigger uses in both places. After upgrading, try a write as a user: an
+  administrator's own statements are not checked.
+
+The functions those bodies call are not the session's to decide either, and neither are the ones
+in a view's query, a row or masking policy, or a table's `CHECK` constraints, generated columns and
+column defaults. DuckDB keeps all of these as written and looks their names up again in whichever
+session reads or writes. Under access control each has one schema to look in, fixed by what it
+belongs to, and no session's search path, current catalog or temporary objects are consulted:
+
+| Expression | Where its functions, macros and types are found |
+|---|---|
+| A table's `CHECK` constraints, generated columns, column defaults, index expressions | the table's schema |
+| A trigger's body | its table's schema |
+| A view's query | the view's schema |
+| A row or masking policy | `main` of the protected table's database |
+| A macro one of them calls | where the caller's are |
+
+A name without a schema is found there, then in `main` of that same database (never the session's
+current one), then among DuckDB's own functions: a view in `reports` that calls `fmt_amount` gets
+`reports.fmt_amount` if there is one, else `main.fmt_amount`. `schema.name` is found in that schema
+of the same database, `catalog.schema.name` exactly there. A macro is never called as a method
+inside one of these (`x.is_valid()`; DuckDB's own functions are: `x.lower()`). A macro or type in a
+third schema, which only the creator's search path finds, is named with its schema:
+`DEFAULT util.stamp()`. `CREATE TABLE`, `CREATE INDEX` and `CREATE TRIGGER` store the macros they
+call that way, as the creating session finds them (`duckdb_tables()` shows
+`CHECK(main.is_valid(x))`, `duckdb_indexes()` `main.norm("name")`); `CREATE VIEW`,
+`CREATE ROW POLICY` and `SET MASKING POLICY` refuse a definition whose names would be something
+else where it is evaluated, with the name to write. Only an administrator may create a
+macro or type that an existing view, trigger, policy or table would then find first. An
+administrator's session gets the same answers as anyone's.
+
+Views, triggers, policies and tables from before 2.14 are looked up the same way. One that names
+a macro of a third schema without it, or calls a macro as a method, is refused when it is used,
+saying which name and how to mend it: `CREATE OR REPLACE` the view or trigger, re-create the policy,
+`ALTER TABLE ... ALTER COLUMN ... SET DEFAULT`; for a `CHECK` constraint or generated column, which
+DuckDB cannot alter, re-create the table or have an administrator create a macro of that name in
+the table's own schema that calls the one meant
+(`CREATE MACRO app.is_valid(x) AS main.is_valid(x)`).
+
+An index over a macro that was made before 2.14 keeps the macro's name as written, and an index's
+entries are only right for the macro they were computed with. Such an index is used while its name
+can mean one macro only. Where its database has several macros of that name (one in the table's
+schema and one in `main`, say), or the name is in neither place, reads and writes of the table and
+`CHECKPOINT` are refused, saying so, until the index is dropped and created again: `CREATE INDEX`
+then stores the macro with its schema.
+
+On a server without access control every session may do anything anyway and DuckDB's own behaviour
+stands: name the tables in a trigger's action with their schema.
+
 A write needs the privilege of what it does. `INSERT ... ON CONFLICT DO NOTHING` and
 `INSERT OR IGNORE` need `INSERT`; `ON CONFLICT ... DO UPDATE` and `INSERT OR REPLACE` need `INSERT`
 and `UPDATE`; a `MERGE INTO` needs `INSERT`, `UPDATE` or `DELETE` for each kind of `WHEN ... THEN`
 action it has. Each also needs `SELECT` on the target's columns it reads, which for the conflict
 forms is the key that tells a conflict (`GRANT SELECT (id) ON t TO r` is enough).
+
+An `UPDATE` or `DELETE` needs `SELECT` on the columns the statement itself reads (in `WHERE`, a
+`SET` expression, a join, a subquery; on all of them for a `RETURNING`), as in Postgres, and on the
+columns DuckDB has to read to check a constraint or keep an index whose error could name them (a
+table's unique keys for a `DELETE`, for instance). So an unfiltered `UPDATE t SET x = 0` or
+`DELETE FROM t` on a table without keys needs none, with triggers on the table or without. With
+triggers, a write needs `SELECT` on the columns of the table's keys and indexes (and an `UPDATE` on
+those of a `CHECK` over several columns, or of one that calls a macro) even where it would not
+without them, and on a table that
+also has generated columns, on every column DuckDB reads to hand the triggers their rows.
+
+DuckDB hands a table's triggers the rows a write changes (a transition table, `OLD`, `NEW`), and
+somebody answers for a writer who may not read those rows itself:
+
+- **An administrator's trigger vouches for its body.** When an administrator's session creates (or
+  replaces) a trigger, the writer needs no `SELECT` for that body's reads of the rows: the
+  administrator wrote the body, and so chose where the rows go. An administrator who puts a
+  row-copying trigger on a table is choosing who can see those rows: whoever can read the table
+  the body copies them into, or the error a failing body raises. Everything else the body does
+  (the tables it writes, other tables it reads) still takes the writer's rights.
+- **A user's trigger answers with its owner's rights:** the owner needs `SELECT` on the table.
+- **Any other trigger answers for nothing**, and reading the rows takes the writer's own `SELECT`:
+  a trigger that DuckDB statements in the init SQL created or replaced (they run outside access
+  control, so nobody is on record as having made it), and one that was already in a database
+  file. An administrator makes such a trigger vouch by running its `CREATE OR REPLACE TRIGGER`
+  once in a session.
 
 The init SQL (`init_sql_commands`, `init_sql_commands_file`) can hold these statements too.
 They run as the administrator, in order with the DuckDB statements around them, so a grant

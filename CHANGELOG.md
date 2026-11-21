@@ -711,6 +711,108 @@ also closes gaps there.
   upload (2.13.1's was refused because 2.13.0's draft was still there), and an older build never
   replaces a newer one. Closed and open testing and production stay manual in Play Console.
 
+### Security
+
+- **Access control: a policy, a view, a trigger and a table's own expressions find their
+  functions in one place, whatever the session.** A row or masking policy, a view's query, a
+  trigger's body, and a table's CHECK constraints, generated columns and column defaults are
+  kept as written and looked up again in the session of whoever reads or writes. Under access
+  control the functions, macros and types they name are no longer found through that session
+  (its search path, `USE`, its current catalog, its temporary objects). Each has one schema to
+  look in, fixed by what it belongs to: a table's own schema for its constraints, generated
+  columns, defaults and index expressions; the trigger table's for a trigger's body; the view's for a view; `main`
+  of the table's database for a policy (a policy belongs to no schema). A name without a schema
+  is found there, then in `main` of that same database, then among DuckDB's own functions (the
+  order DuckDB documents for views, without the session); `schema.name` in that schema of the
+  same database; and a macro is not called as a method (`x.is_valid()`), which only DuckDB's own
+  functions are. The same
+  holds inside the macros they call. Every session gets the same answer, an administrator's
+  included. Affected: every release with access control, through 2.13.1.
+  - What to write: nothing new for a macro or type in the object's own schema or in `main`.
+    One in a third schema, which only the creator's search path finds, is named with its schema
+    (`util.stamp()`). `CREATE TABLE`, `CREATE INDEX` and `CREATE TRIGGER` store the macros they
+    call that way for you, as the creating session finds them (`duckdb_indexes()` shows
+    `main.norm("name")`); `CREATE VIEW`, `CREATE ROW POLICY` and setting a masking policy on a
+    column refuse a definition whose names would be something else where it is evaluated, saying
+    what to write. Only an
+    administrator may create a macro or type that an existing object would then find first.
+  - Objects made before this release are looked up the same way. One whose macro is in its
+    own schema or in `main` (or is named with its schema) works as before. One that names a
+    macro of a third schema bare, or calls a macro as a method, is refused when used, saying which name and what
+    to do: `CREATE OR REPLACE` the view or trigger, re-create the policy, change a default with
+    `ALTER TABLE`; for a CHECK constraint or generated column, which DuckDB cannot alter,
+    re-create the table, or an administrator creates a macro of that name in the table's schema
+    that calls the one meant (`CREATE MACRO app.is_valid(x) AS main.is_valid(x)`). After
+    upgrading, read and write as a user once.
+  - An index over a macro, made before this release, keeps the macro's name as written. It is
+    used only while that name can mean one macro: if its database has several macros of the
+    name, or the name is not in the table's schema or `main`, reads and writes of the table
+    (and `CHECKPOINT`) are refused until the index is dropped and created again, which stores
+    the macro with its schema. (An index kept with another macro than the one its entries were
+    computed with is wrong, and DuckDB ends a `DELETE` on it with a fatal error.)
+  - This needs Hardcharger's DuckDB build (a small patch to DuckDB's binder,
+    `server/scripts/patch-duckdb-name-scope.cmake`): rebuild the dependencies when building
+    from source.
+- **Access control: what a trigger's action names no longer depends on the session that fires
+  it.** DuckDB looks the names in a trigger's action up again in every statement that fires the
+  trigger, in the writer's session. Under access control a table, view or sequence that an action
+  names without its catalog (a bare name, or `schema.name`) must now be, in the writer's session,
+  the object it is for the trigger's own table, and nothing from outside the trigger's body (a
+  `WITH` of the statement that fires it, or of a trigger body that does) may take the place of a
+  table or view the body reads; otherwise the write is refused, naming the trigger, the name and
+  what to do about it. The same holds for the names in the macros a trigger's body calls, and for
+  a user's trigger fired by an administrator. Affected: every release with triggers under access
+  control, through 2.13.1.
+  - `CREATE [OR REPLACE] TRIGGER` stores the action with its tables, views and sequences named
+    with their schema, as the creator's session resolves them (`INSERT INTO main.audit_log ...`),
+    in a session and in the init SQL alike. Not with their catalog: renaming a database file, or
+    attaching one under another name, leaves its triggers working. It refuses an action that names
+    a sequence (`nextval`) or a `query_table()` table by anything but a plain string, which could
+    never be checked when the trigger fires.
+  - A session's temporary objects are found first, and the temporary catalog's schema is `main`:
+    a writer with a temporary table, view or sequence named like an object in `main` that a
+    trigger names is refused until it drops it. A trigger on a table of an attached database fires
+    for sessions whose current catalog is that database (`USE`).
+  - Triggers made before (names as written) keep firing wherever their names resolve to the
+    objects for their table. Refused for every writer but an administrator, whose own statements
+    are not checked (so try a write as a user after upgrading), until their owner runs
+    `CREATE OR REPLACE TRIGGER` once: a trigger whose bare name is in both its table's schema and
+    `main`, and one whose bare name only its creator's own search path found. Only an
+    administrator may now create a table or view that would put such a name in both. A trigger
+    whose body calls a macro that reads a table or a sequence fires again.
+  - A `FOR EACH ROW` trigger whose action has a `WITH` of its own fires; the `WITH` is checked
+    as part of the trigger's body.
+
+### Fixed
+
+- **Access control: an administrator's `CREATE TRIGGER IF NOT EXISTS` leaves a user's trigger
+  hers.** Run over a user's existing trigger, it left the trigger as it was but recorded it as
+  the administrator's, so it ran with the writer's rights from then on. It now changes nothing.
+- **Access control: a write that reads nothing needs no `SELECT` on a table with triggers.** A
+  user holding `UPDATE` or `DELETE` but not `SELECT` was refused `UPDATE t SET x = 0` and
+  `DELETE FROM t` with "no SELECT privilege on table" as soon as the table had a trigger, though
+  the same statements run on a table without one: DuckDB makes such a write read every column, to
+  hand the triggers their rows. A write now needs `SELECT` on the columns the statement itself
+  reads (`WHERE`, a `SET` expression, a join, a subquery, its own `RETURNING`), with a trigger or
+  without, and `INSERT ... ON CONFLICT DO UPDATE` on the key and what its `SET` and `WHERE` read.
+  Somebody answers for the rows where a trigger's body reads them (a transition table, `OLD`,
+  `NEW`):
+  - **an administrator's trigger vouches for its body**: the writer needs no `SELECT` for a body's
+    reads of the rows when an administrator's session created or replaced the trigger. An
+    administrator who puts a row-copying trigger on a table is choosing who can see those rows.
+    Everything else the body does still takes the writer's rights;
+  - a user's trigger answers with its owner's rights: the owner needs `SELECT` on the table;
+  - any other trigger (one the init SQL's DuckDB statements created or replaced, one that came
+    with a database file) answers for nothing: reading the rows takes the writer's `SELECT`, as
+    before. `CREATE OR REPLACE TRIGGER` in an administrator's session makes it vouch.
+
+  Columns of the table's keys and indexes (and, for an `UPDATE`, of a `CHECK` over several
+  columns) still need the writer's `SELECT` on a table with triggers, because a constraint error
+  of the write can name or tell of them, and so does every scanned column of a table with
+  generated columns. So do the columns of a single-column `CHECK` that calls anything but
+  DuckDB's own functions (a macro), since its error can name the value. The refusal says which
+  of these it is.
+
 ## [2.13.1] - 2026-11-15
 
 ### Fixed
