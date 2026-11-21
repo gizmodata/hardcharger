@@ -183,10 +183,12 @@ def test_import_database_reads_its_load_sql_through_the_same_check(server, tmp_p
 
 
 @pytest.mark.parametrize("count", SIZES)
-def test_init_sql_with_unclosed_parentheses_stops_the_server_at_once(launcher, count):
+def test_init_sql_with_unclosed_parentheses_stops_the_server_at_once(launcher, count, tmp_path):
+    # The largest fixture exceeds the OS limit for a single environment variable.
+    init = tmp_path / "init.sql"
+    init.write_text("CREATE TABLE t (i INTEGER);\nSELECT " + "(" * count, encoding="utf-8")
     started = time.monotonic()
-    failed = launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": "CREATE TABLE t (i INTEGER);\nSELECT " + "(" * count},
-                            expect_up=False)
+    failed = launcher.start(args=["--init-sql-commands-file", str(init)], expect_up=False)
     assert failed.process.wait(timeout=30 * TIMEOUT_SCALE) == 1
     assert time.monotonic() - started < 10 * TIMEOUT_SCALE, "the server did not stop at once"
     log = failed.log()
