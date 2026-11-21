@@ -57,6 +57,24 @@ def ratio_interval(candidate: list[list[float]], baseline: list[list[float]], it
     return point, low, high
 
 
+def paired_ratio_interval(candidate: list[list[float]], baseline: list[list[float]], iterations: int,
+                          confidence: float, seed: int = 6) -> tuple[float, float, float]:
+    """Median of within-start ratios. Bootstrap whole pairs, then observations within each side."""
+    pairs = list(zip(candidate, baseline, strict=True))
+    point = statistics.median(statistics.median(c) / statistics.median(b) for c, b in pairs)
+    rng = random.Random(seed)
+    ratios = []
+    for _ in range(iterations):
+        sample = []
+        for c, b in rng.choices(pairs, k=len(pairs)):
+            sample.append(statistics.median(rng.choices(c, k=len(c))) /
+                          statistics.median(rng.choices(b, k=len(b))))
+        ratios.append(statistics.median(sample))
+    ratios.sort()
+    tail = (1 - confidence) / 2
+    return point, ratios[int(tail * (iterations - 1))], ratios[int((1 - tail) * (iterations - 1))]
+
+
 def judge(point: float, low: float, high: float, threshold: float, higher_is_better: bool,
           absolute_change: float | None = None, minimum_change: float = 0.0) -> str:
     """'regression', 'possible regression', 'improvement' or 'ok'.

@@ -233,3 +233,9 @@ def test_select_previous_published_stable_and_anchors():
         assert baselines(tag, published, ["2.4.1"]) == ["2.4.1", "2.13.10"]
     with pytest.raises(ValueError, match="no published stable predecessor"):
         baselines("v2.4.0", published, [])
+
+def test_upstream_pairs_preserve_overhead_under_drifting_runner_load():
+    baseline = [[speed] * 5 for speed in [1, 4, 2, 3, 1]]
+    candidate = [[v * 1.08 for v in rep] for rep in baseline]
+    point, low, high = stats.paired_ratio_interval(candidate, baseline, iterations=500, confidence=.95)
+    assert (point, low, high) == pytest.approx((1.08, 1.08, 1.08))

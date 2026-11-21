@@ -63,7 +63,7 @@ def compare_overhead(results, thresholds):
     metrics = {}
     for name in sides[0][0]:
         candidate, baseline = [[rep[name] for rep in side] for side in sides]
-        ratio, low, high = stats.ratio_interval(candidate, baseline, thresholds["bootstrap_iterations"],
+        ratio, low, high = stats.paired_ratio_interval(candidate, baseline, thresholds["bootstrap_iterations"],
                                                thresholds["confidence"])
         metrics[name] = {"ratio": ratio, "low": low, "high": high, "over_budget": low > 1 + budget}
     return {"budget": budget, "confidence": thresholds["confidence"], "metrics": metrics}
