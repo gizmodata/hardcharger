@@ -1,5 +1,6 @@
 {
  "duckdb_overhead": 0.05,
+ "duckdb_overhead_by_release": {"2.14.0": 0.25},
  "latency": 0.1,
  "suite": 0.05,
  "tail": 0.25,

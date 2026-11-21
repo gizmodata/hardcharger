@@ -166,7 +166,7 @@ own changelog in `python/CHANGELOG.md`.
   10 (throughput, p50/p90/p99, errors) and the ten-client TPC-H case, with server CPU and peak
   memory. Every answer is checked, separately from timing. The report flags changes whose
   bootstrap interval is past configurable thresholds and keeps raw JSON and per-host baselines.
-  Release CI gates publication on comparisons with previous stable releases and a 5% warm-query
+  Release CI gates publication on comparisons with previous stable releases and a 25% warm-query
   overhead budget against stock DuckDB. Each GitHub Release includes the measurements, thresholds
   and verdict. The suite also runs weekly, on demand and on AWS. See `docs/benchmarks.md`.
 

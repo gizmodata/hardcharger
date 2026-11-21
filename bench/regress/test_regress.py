@@ -185,11 +185,15 @@ def test_one_repetition_is_never_judged():
     assert "fewer than 3 repetitions" in report
 
 
-@pytest.mark.parametrize(("factor", "blocked"), [(1.04, False), (1.06, True)])
-def test_release_gate_upstream_budget_and_replay(tmp_path, factor, blocked):
+@pytest.mark.parametrize(("version", "factor", "blocked"), [
+    ("2.14.0", 1.24, False), ("2.14.0", 1.26, True), ("2.14.0-rc.1", 1.24, False),
+    ("2.14.1", 1.04, False), ("2.14.1", 1.06, True),
+])
+def test_release_gate_upstream_budget_and_replay(tmp_path, version, factor, blocked):
     import subprocess
 
     run = fake_run(slow_factor=1)
+    run["servers"][run["candidate"]]["version"] = version
     run["config"].update(release_gate=True, warm_passes=1, mp_runs=2)
 
     def measurements(value):

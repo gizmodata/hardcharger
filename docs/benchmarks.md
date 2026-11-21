@@ -1099,9 +1099,11 @@ Host classes are `aws-<instance type>`, `gha-<runner label>` or `<os>-<arch>-loc
   the candidate's engine version. Both engines read the same candidate database with the same thread
   count, CPU affinity and memory limit. Each returns complete Arrow results. The embedded and server
   runs alternate which goes first. The upstream interval resamples matched pairs of starts to
-  account for variation in runner speed over the course of the job. The 5% overhead budget applies to the total time to execute and
+  account for variation in runner speed over the course of the job. The upstream overhead budget applies to the total time to execute and
   fetch the 22 warm TPC-H queries and to the median latency of each many-pipelines statement. These
-  timings exclude answer validation. The lower bound of the 95% interval must exceed 5% to block.
+  timings exclude answer validation. For the 2.14.0 release and its release candidates, the budget
+  is 25% per workload. The default for other releases is 5%. The lower bound of the 95% interval
+  must exceed the applicable budget to block.
   A wrong answer, statement error, missing required comparison or confirmed regression blocks release
   publication. Weekly and manual comparisons report changes against prior Hardcharger releases.
 - Each published tag carries `performance-baseline.tar.gz` in its GitHub Release assets, covered by

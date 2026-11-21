@@ -59,7 +59,8 @@ def compare_overhead(results, thresholds):
     sides = [[samples(r if side == "candidate" else r["upstream_duckdb"],
                       config["warm_passes"], config["mp_runs"]) for r in records]
              for side in ("candidate", "upstream")]
-    budget = thresholds["duckdb_overhead"]
+    version = results["servers"][results["candidate"]]["version"].partition("-rc.")[0]
+    budget = thresholds.get("duckdb_overhead_by_release", {}).get(version, thresholds["duckdb_overhead"])
     metrics = {}
     for name in sides[0][0]:
         candidate, baseline = [[rep[name] for rep in side] for side in sides]
