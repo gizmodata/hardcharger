@@ -453,6 +453,7 @@ arrow::Status RbacStore::OpenStore() {
     ARROW_ASSIGN_OR_RAISE(file_path_, PrepareStoreFile(file));
   }
   dd::DBConfig config;
+  config.SetOptionByName("hardcharger_require_extension_repository_opt_in", dd::Value::BOOLEAN(true));
   if (duckdb_file) {
     config.file_system = dd::make_uniq<dd::VirtualFileSystem>(dd::make_uniq<PrivateLocalFileSystem>());
   }

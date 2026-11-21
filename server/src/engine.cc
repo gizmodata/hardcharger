@@ -110,6 +110,10 @@ chargewire_duckdb::DuckDBBackend::Options EngineOptions(const Config& config) {
   chargewire_duckdb::DuckDBBackend::Options options;
   options.database = config.database.empty() ? ":memory:" : config.database;
   options.read_only = config.read_only;
+  // Adding an extension repository introduces a signing key. Require administrator opt-in on every server.
+  options.instance_options.emplace_back("hardcharger_require_extension_repository_opt_in", "true");
+  // Short server queries should finish without walking every pipeline to estimate progress.
+  options.instance_options.emplace_back("hardcharger_delay_query_progress", "true");
   if (!config.memory_limit.empty()) {
     options.instance_options.emplace_back("memory_limit", config.memory_limit);
   }
