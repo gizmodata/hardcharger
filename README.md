@@ -950,14 +950,13 @@ masked. Two lists of names are used:
   `pw`, or ends in `_pass` or `_pw` (`s3_secret_access_key`, `X-API-Key`,
   `Proxy-Authorization`, `bearer_token`). It masks a **setting's, an option's and a named
   argument's** value, and every key in a connection string, a URL or other text.
-- Some of those words name ordinary data as well (a `token` column of a text-analysis table,
-  `auth` for an authentication method, `pwd` for a directory, `first_pass`), so **a column, a
+- Some of those words name ordinary data as well (`auth` for an authentication method, `pwd` for a directory, `first_pass`), so **a column, a
   struct or MAP key and a name/value pair** mask their value only under a name **only a
   credential has**: one that ends in `password`, `passwd`, `passphrase`, `secret`, `apikey` or
   `accountkey`, or that is (or ends in `_` and) `secret_key`, `access_key`, `api_key`,
   `private_key`, `encryption_key`, `account_key`, `subscription_key`, `access_token`,
   `refresh_token`, `auth_token`, `bearer_token`, `api_token`, `id_token`, `session_token` or
-  `security_token`. A key may also be an HTTP header that carries a credential
+  `security_token`. A column named exactly `token` also masks its values. A key may also be an HTTP header that carries a credential
   (`{'Authorization': …}`, `MAP {'Cookie': …}`).
 
 **Statements replaced whole**, by their own first words (not by words in a comment or a
@@ -1005,6 +1004,8 @@ credential for the statement's errors (below).
 | a header line | `Authorization:`, `Proxy-Authorization:`, `Cookie:`, `Set-Cookie:`, `X-API-Key:`, `X-Auth-Token:`, `X-Amz-Security-Token:`, to the end of the line |
 | SQL given as text | a literal or a comment that holds a statement (`postgres_execute('pg', 'ALTER ROLE app PASSWORD ''v''')`, `query('…')`, a statement commented out) is read again with every rule above, four levels deep (text that begins as a statement does, `SELECT`, `ALTER`, `INSERT` and the like, is read as SQL only, so a literal inside it is read with its quotes resolved at each level); one DuckDB cannot tokenize, or with a backslash before a quote, that names a credential before a quote is masked whole |
 | a value built from pieces | when a credential's value runs to the end of a literal that is joined to something (`'host=h password=' \|\| x`), the rest of the concatenation; when the literal is a function's argument and the value is a placeholder (`format('…?token={}', x)`, `%s`), the function's other arguments |
+
+An error over 64 KiB, or one whose credential replacements exceed the redaction work budget, is logged as `[REDACTED: error details omitted]`.
 
 **Text DuckDB cannot tokenize** (an unterminated string literal, quoted identifier, `/*`
 comment or dollar-quoted string, or invalid UTF-8) cannot be searched for values and never

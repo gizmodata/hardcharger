@@ -106,8 +106,11 @@ bool IsUnambiguousNormal(std::string_view normal) {
   });
 }
 
-// A name only a credential has (kUnambiguousWords, kUnambiguousCompounds).
-bool IsUnambiguousCredentialName(std::string_view name) { return IsUnambiguousNormal(Normal(name)); }
+// A column named token also masks values, even when it stores ordinary application data.
+bool IsCredentialColumn(std::string_view name) {
+  const std::string normal = Normal(name);
+  return normal == "token" || IsUnambiguousNormal(normal);
+}
 
 // A struct's, a MAP's or a name/value pair's key whose value is masked: such a name, or an
 // HTTP header that carries a credential (`{'Authorization': ...}`).
@@ -654,16 +657,39 @@ static std::string WithoutUnparsedPieces(std::string text) {
   return text;
 }
 
+namespace {
+constexpr std::size_t kMaxErrorBytes = 64 * 1024;
+constexpr char kOmittedError[] = "[REDACTED: error details omitted]";
+
+// Replacements scan the error for each value and its delimiter-separated pieces.
+// Budget the bytes in all candidate values against the text to be searched before
+// splitting or copying them. Empty entries still cost one unit.
+bool ErrorRedactionFits(std::size_t text_bytes, const std::vector<std::string>& values) {
+  constexpr std::size_t kWorkBudget = 4 * 1024 * 1024;
+  if (text_bytes > kMaxErrorBytes) return false;
+  std::size_t remaining = kWorkBudget / std::max<std::size_t>(1, text_bytes);
+  for (const auto& value : values) {
+    const auto cost = std::max<std::size_t>(1, value.size());
+    if (cost > remaining) return false;
+    remaining -= cost;
+  }
+  return true;
+}
+}  // namespace
+
 std::string RedactCredentials(std::string text) {
+  if (text.size() > kMaxErrorBytes) return kOmittedError;
   text = WithoutUnparsedPieces(std::move(text));
   Found found;
   std::string masked = MaskText(text, found);
   // What was masked is replaced wherever else the text has it (an error that quotes a
   // connection string, and then one piece of its password).
+  if (!ErrorRedactionFits(masked.size(), found.secrets)) return kOmittedError;
   return found.secrets.empty() ? masked : RedactSecrets(std::move(masked), found.secrets);
 }
 
 std::string RedactCredentials(std::string text, const std::vector<std::string>& secrets) {
+  if (!ErrorRedactionFits(text.size(), secrets)) return kOmittedError;
   for (const auto& secret : secrets) {
     if (secret.empty() || text.find(secret) == std::string::npos) continue;
     std::string out;
@@ -758,13 +784,16 @@ std::string RedactError(std::string_view error, const MaskedStatement& statement
     return "[REDACTED: error of a statement that could not be read: " + *statement.unreadable + "]";
   }
   if (statement.computed) return "[REDACTED: error of a statement that computes a credential value]";
+  if (error.size() > kMaxErrorBytes) return kOmittedError;
   std::string text(error);
   // DuckDB's excerpt of the statement, which may end in the middle of a value.
   if (auto at = text.find("\nLINE "); at != std::string::npos) {
     text.resize(at);
     while (!text.empty() && IsSpace(text.back())) text.pop_back();  // (the blank line before the excerpt)
   }
+  if (!ErrorRedactionFits(text.size(), statement.secrets)) return kOmittedError;
   text = RedactSecrets(std::move(text), statement.secrets);
+  if (!ErrorRedactionFits(text.size(), bound)) return kOmittedError;
   text = RedactSecrets(std::move(text), bound);
   return RedactCredentials(std::move(text));
 }
@@ -1468,7 +1497,7 @@ class SqlMasker {
         i = Matching(i, close);  // (no column list has brackets; nothing in them is one)
       } else if (IsOp(i, ",")) {
         column++;
-      } else if (const auto name = NameAt(i); name && IsUnambiguousCredentialName(*name)) {
+      } else if (const auto name = NameAt(i); name && IsCredentialColumn(*name)) {
         if (columns.empty() || columns.back() != column) columns.push_back(column);
       }
     }
@@ -1770,7 +1799,7 @@ class SqlMasker {
           if (auto masked = MaskBody(NameBody(text(i)), /*sql=*/false, nullptr)) Replace(i, i + 1, Quoted(*masked, text(i).front()));
         }
         if (IsCredentialName(name)) {
-          name_strict = IsUnambiguousCredentialName(name);
+          name_strict = IsCredentialColumn(name);
           name_key = IsCredentialKey(name);
           if (name_strict && !brackets.empty()) brackets.back().named = true;
           after = After::kName;
@@ -1858,7 +1887,7 @@ class SqlMasker {
       }
       at = Sig(dot + 1, end);
     }
-    return last && IsUnambiguousCredentialName(*last) && !(at < end && IsOp(at, "("));
+    return last && IsCredentialColumn(*last) && !(at < end && IsOp(at, "("));
   }
 
   // IDENTIFIED BY 'password', IDENTIFIED WITH plugin BY 'password' / AS 'hash' (MySQL, Oracle).

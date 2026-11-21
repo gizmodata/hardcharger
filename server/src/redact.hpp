@@ -91,7 +91,8 @@ std::string RedactSecrets(std::string text, const std::vector<std::string>& secr
 // ("LINE 1: ...") is dropped, every value the masking hid (and each of `bound`, the values
 // bound to its masked placeholders) is replaced by ***, and what is left goes through
 // RedactCredentials. When the hidden value is computed or the statement could not be read,
-// nothing of the error can be trusted and a line that says which replaces it.
+// nothing of the error can be trusted and a line that says which replaces it. Errors
+// that exceed the diagnostic size or redaction work budget omit their details.
 std::string RedactError(std::string_view error, const MaskedStatement& statement,
                         const std::vector<std::string>& bound = {});
 

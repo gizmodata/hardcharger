@@ -217,17 +217,31 @@ TEST(Redaction, EveryKindOfLiteralAndExpressionValueIsMasked) {
   // A comparison with another column hides nothing; one with a literal does.
   EXPECT_EQ(LoggableSql("SELECT * FROM a JOIN b ON a.api_key = b.api_key JOIN c USING (id) WHERE a.passwd <> 'S3CR3T' OR a.id = 7"),
             "SELECT * FROM a JOIN b ON a.api_key = b.api_key JOIN c USING (id) WHERE a.passwd <> *** OR a.id = 7");
-  // A column whose name ordinary data has too (token, pwd, auth, sig, ...) is compared and set
+  // A column whose name ordinary data has too (pwd, auth, sig, ...) is compared and set
   // as written: only a credential setting, option, named argument or connection string masks it.
-  for (const char* sql : {"SELECT * FROM t WHERE token = 'S3CR3T' AND id = 7 ORDER BY id",
+  for (const char* sql : {"SELECT * FROM t WHERE page_token = 'S3CR3T' AND id = 7 ORDER BY id",
                           "SELECT * FROM a JOIN b ON a.token = b.token WHERE a.pwd <> 'S3CR3T' OR a.id = 7",
                           "UPDATE t SET auth = 'S3CR3T', sig = 'S3CR3T' WHERE credential = 'S3CR3T' OR bearer = 'S3CR3T'",
-                          "SELECT * FROM t WHERE first_pass IN (1, 2) AND token LIKE 'S3CR3T%' AND signature BETWEEN 'a' AND 'S3CR3T'",
-                          "INSERT INTO tokens (doc, token, cookie) VALUES (1, 'S3CR3T', 'S3CR3T')",
+                          "SELECT * FROM t WHERE first_pass IN (1, 2) AND page_token LIKE 'S3CR3T%' AND signature BETWEEN 'a' AND 'S3CR3T'",
+                          "INSERT INTO tokens (doc, page_token, cookie) VALUES (1, 'S3CR3T', 'S3CR3T')",
                           "SELECT {'token': 'S3CR3T'}, MAP {'jwt': 'S3CR3T'}, json_object('auth', 'S3CR3T')",
                           "SET VARIABLE page_token = 'S3CR3T'"}) {
     EXPECT_EQ(LoggableSql(sql), sql);
   }
+}
+
+TEST(Redaction, TokenColumnMasksValues) {
+  EXPECT_EQ(LoggableSql("INSERT INTO t (id, token) VALUES (1, 'example')"), "INSERT INTO t (id, token) VALUES (1, ***)");
+  EXPECT_EQ(LoggableSql("UPDATE t SET token = 'example'"), "UPDATE t SET token = ***");
+  EXPECT_EQ(LoggableSql("SELECT * FROM t WHERE length(token) > 2"), "SELECT * FROM t WHERE length(token) > ***");
+  EXPECT_EQ(LoggableSql("SELECT id FROM t WHERE t.token = 'example'"), "SELECT id FROM t WHERE t.token = ***");
+}
+
+TEST(Redaction, OmitsErrorDetailsOverBudget) {
+  const hardcharger::MaskedStatement ordinary;
+  EXPECT_EQ(RedactError("ordinary diagnostic", ordinary), "ordinary diagnostic");
+  EXPECT_EQ(RedactError(std::string(65537, 'a'), ordinary), "[REDACTED: error details omitted]");
+  EXPECT_EQ(RedactError(std::string(4096, 'a'), ordinary, {std::string(2048, 'b')}), "[REDACTED: error details omitted]");
 }
 
 TEST(Redaction, OptionListsStructKeysAndKeyFunctions) {
@@ -1080,11 +1094,11 @@ TEST(RedactionReview, F05OrdinaryStatementsAreKeptAsWritten) {
                           "UPDATE customers SET first_pass = first_pass + 1 WHERE id = 3", "SELECT * FROM s WHERE auth = 'basic'",
                           "SELECT CASE WHEN auth = 'basic' THEN 1 END FROM s", "SELECT * FROM s WHERE auth IS DISTINCT FROM 'none'",
                           "SELECT * FROM s WHERE sig = 'x' AND bearer = 'b' AND credential = 'cert'",
-                          "SELECT * FROM tokens WHERE token IN ('cat', 'mat')", "SELECT * FROM tokens WHERE token LIKE 'c%'",
-                          "SELECT * FROM tokens WHERE token BETWEEN 'a' AND 'm'", "SELECT * FROM tokens WHERE token NOT IN (SELECT token FROM stopwords)",
+                          "SELECT * FROM tokens WHERE page_token IN ('cat', 'mat')", "SELECT * FROM tokens WHERE page_token LIKE 'c%'",
+                          "SELECT * FROM tokens WHERE page_token BETWEEN 'a' AND 'm'", "SELECT * FROM tokens WHERE token NOT IN (SELECT token FROM stopwords)",
                           "SELECT count(*) FROM sessions WHERE session_token IN (SELECT session_token FROM sessions WHERE user_id = 3)",
-                          "SELECT * FROM t JOIN s ON lower(t.token) = lower(s.token)", "SELECT * FROM tokens WHERE length(token) > 2",
-                          "INSERT INTO tokens (doc_id, pos, token, tag) VALUES (99, 1, 'dog', 'NOUN'), (99, 2, 'ran', 'VERB')",
+                          "SELECT * FROM t JOIN s ON lower(t.token) = lower(s.token)", "SELECT * FROM tokens WHERE length(page_token) > 2",
+                          "INSERT INTO tokens (doc_id, pos, page_token, tag) VALUES (99, 1, 'dog', 'NOUN'), (99, 2, 'ran', 'VERB')",
                           "SELECT json_object('token', 'cat', 'pos', 3)", "SELECT * FROM notes WHERE note IN ('password', 'token', 'api_key')",
                           "SELECT * FROM s WHERE auth = 'password'", "SELECT * FROM events WHERE url LIKE 'https://example.com/p/%?code=%'",
                           "SELECT * FROM events WHERE url = 'https://example.com/cb?state=1&code=4/0Ab'",

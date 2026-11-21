@@ -7,6 +7,8 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+- SQL logs mask values for columns named `token`. Error details are omitted when redaction exceeds its work budget.
+
 ### Security
 
 - **The statement log's credential masking is rebuilt on DuckDB's own tokenizer, and what it
