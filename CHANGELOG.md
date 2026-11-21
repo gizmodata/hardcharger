@@ -116,6 +116,15 @@ own changelog in `python/CHANGELOG.md`.
   `Forwarded` read as from a listed proxy, for proxies whose address range other workloads share.
   The header is compared in constant time, always removed from requests, and the secret is never
   logged or listed.
+- **A performance regression suite (`bench/regress`, #6).** It runs a candidate server and
+  published releases (installed by the official installer) on one machine with identical
+  settings, interleaved round-robin over repeated server starts: TPC-H (per-query latency, cold
+  and warm suite time), plans with many pipelines (q311's shape), concurrent clients at 1, 4 and
+  10 (throughput, p50/p90/p99, errors) and the ten-client TPC-H case, with server CPU and peak
+  memory. Every answer is checked, separately from timing. The report flags changes whose
+  bootstrap interval is past configurable thresholds and keeps raw JSON and per-host baselines.
+  It runs by hand or weekly in GitHub Actions (`perf-regression.yml`, not a gate) and on a
+  throwaway AWS instance (`bench/regress/aws.sh`); see `docs/benchmarks.md`.
 
 ### Changed
 

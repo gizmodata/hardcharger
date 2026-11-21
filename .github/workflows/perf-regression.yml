@@ -1,0 +1,126 @@
+name: Performance regression
+
+# The performance regression suite (bench/regress, issue #6): a candidate server against
+# published releases, the same workloads interleaved on one runner, with a report of flagged
+# regressions and wrong answers. Not a gate: run by hand, and weekly for main's latest build.
+#
+# Runner: GitHub's standard Arm runner (ubuntu-24.04-arm, 4 vCPUs) by default, as production
+# runs on Arm; the server gets half the CPUs (pinned) and the clients the other half. A shared
+# runner has noisy neighbours: the round-robin interleaving and the bootstrap intervals absorb
+# much of it, but treat its flags as leads. Release decisions use a dedicated instance
+# (bench/regress/aws.sh: c8a.8xlarge, 8 pinned server cores), see docs/benchmarks.md. Set
+# `runner` to a larger runner label if the organization defines one.
+#
+# A wrong answer or a failed statement fails the job; a flagged regression only warns.
+
+on:
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: Published versions to compare with (space-separated; installed by the official installer)
+        type: string
+        default: "2.4.1 2.13.1"
+      candidate:
+        description: "Candidate server: 'main' (main's latest server.yml build), a server.yml run id, or empty (releases only)"
+        type: string
+        default: main
+      scale:
+        description: TPC-H scale factor
+        type: string
+        default: "1"
+      repetitions:
+        description: Server starts per version (round-robin)
+        type: string
+        default: "5"
+      runner:
+        description: Runner label
+        type: string
+        default: ubuntu-24.04-arm
+  schedule:
+    - cron: "17 6 * * 1"  # Mondays: main's latest build against the releases above
+
+permissions:
+  contents: read
+
+# A newer run on the same branch makes an older one pointless: cancel it. Never on a tag:
+# a release run must finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  regress:
+    runs-on: ${{ inputs.runner || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      actions: read  # the candidate tarball, an artifact of a server.yml run
+    env:
+      RELEASES: ${{ inputs.releases || '2.4.1 2.13.1' }}
+      CANDIDATE: ${{ github.event_name == 'schedule' && 'main' || inputs.candidate }}
+      SCALE: ${{ inputs.scale || '1' }}
+      REPETITIONS: ${{ inputs.repetitions || '5' }}
+      RUNNER_LABEL: ${{ inputs.runner || 'ubuntu-24.04-arm' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Client
+        run: python -m pip install -r bench/regress/requirements.txt pytest
+      - name: Offline tests of the suite
+        run: python -m pytest -q bench/regress/test_regress.py
+      - name: Candidate
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [ -n "$CANDIDATE" ] || { echo "no candidate: releases only"; exit 0; }
+          case "$(uname -m)" in x86_64) platform=linux-amd64 ;; aarch64) platform=linux-arm64 ;;
+            *) echo "no Linux build for $(uname -m)"; exit 1 ;; esac
+          # The newest unexpired artifact of that name from main (or from the given run).
+          query=".artifacts[] | select(.expired | not)"
+          if [ "$CANDIDATE" = main ]; then
+            query="$query | select(.workflow_run.head_branch == \"main\")"
+          else
+            query="$query | select(.workflow_run.id == $CANDIDATE)"
+          fi
+          found=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=hardcharger-$platform&per_page=100" \
+            --jq "[$query] | sort_by(.created_at) | last | \"\(.workflow_run.id) \(.workflow_run.head_sha)\"")
+          read -r run sha <<< "$found"
+          [ -n "$run" ] && [ "$run" != null ] || { echo "no hardcharger-$platform artifact for '$CANDIDATE'"; exit 1; }
+          gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "hardcharger-$platform" --dir "$RUNNER_TEMP/candidate"
+          tar -xzf "$RUNNER_TEMP/candidate/hardcharger-$platform.tar.gz" -C "$RUNNER_TEMP/candidate"
+          binary="$RUNNER_TEMP/candidate/hardcharger-$platform/bin/hardcharger-server"
+          "$binary" --version
+          echo "server=${sha:0:9}=$binary" >> "$GITHUB_OUTPUT"
+      - name: Run the suite
+        env:
+          CANDIDATE_SERVER: ${{ steps.candidate.outputs.server }}
+        run: |
+          cpus=$(nproc)
+          half=$(( cpus / 2 ))
+          args=()
+          for version in $RELEASES; do args+=(--release "$version"); done
+          [ -z "$CANDIDATE_SERVER" ] || args+=(--server "$CANDIDATE_SERVER")
+          python bench/regress/run.py "${args[@]}" --scale "$SCALE" --repetitions "$REPETITIONS" \
+            --threads "$half" --memory-limit 6GiB --server-cores "0-$(( half - 1 ))" --client-cores "$half-$(( cpus - 1 ))" \
+            --host-class "gha-$RUNNER_LABEL" --work "$RUNNER_TEMP/regress-work" --out "$RUNNER_TEMP/regress-out"
+      - name: Report
+        if: ${{ !cancelled() }}
+        run: |
+          out="$RUNNER_TEMP/regress-out"
+          [ -f "$out/report.md" ] || { echo "no report"; exit 0; }
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          python - "$out/verdict.json" <<'EOF'
+          import json, sys
+          verdict = json.load(open(sys.argv[1]))
+          for item in verdict["regressions"]:
+              print(f"::warning title=Performance regression::{item['metric']} vs {item['baseline']}: {item['ratio'] - 1:+.1%}")
+          EOF
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: perf-regression
+          path: ${{ runner.temp }}/regress-out
+          retention-days: 90

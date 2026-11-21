@@ -1,0 +1,14 @@
+{
+ "latency": 0.1,
+ "suite": 0.05,
+ "tail": 0.25,
+ "throughput": 0.1,
+ "cpu": 0.15,
+ "rss": 0.2,
+ "min_change_ms": 1.0,
+ "min_change_cpu_s": 0.05,
+ "min_change_mib": 16,
+ "confidence": 0.95,
+ "bootstrap_iterations": 2000,
+ "min_repetitions": 3
+}
