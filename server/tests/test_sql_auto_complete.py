@@ -49,10 +49,13 @@ def server(module_launcher):
 
 
 @pytest.fixture(scope="module")
-def enabled(module_launcher):
-    # The extension loads at startup (from the shared cache, or installed into it once).
+def enabled(module_launcher, server):
+    # Populate the shared cache once under the install lock. An explicit INSTALL
+    # reports repository errors, which DuckDB's startup autoload would suppress.
     with installing(extension="autocomplete"):
-        return module_launcher.start(args=["--log-format", "json", "--enable-sql-auto-complete"], startup_seconds=180)
+        server.admin().execute(sql="INSTALL autocomplete")
+    # The enabled server loads and guards the cached extension at normal startup.
+    return module_launcher.start(args=["--log-format", "json", "--enable-sql-auto-complete"], startup_seconds=180)
 
 
 def user_of(running):

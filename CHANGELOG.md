@@ -10,6 +10,7 @@ own changelog in `python/CHANGELOG.md`.
 ### Fixed
 
 - Align statement logging examples and integration coverage with masking for columns named `token`.
+- Seed the shared cache with signed autocomplete before testing startup and access controls.
 
 ## [2.14.0] - 2026-11-21
 
