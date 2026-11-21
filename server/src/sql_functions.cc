@@ -460,9 +460,11 @@ void RegisterTable(duckdb_v2_connection_handle connection, duckdb_v2_factory_han
   Call([&](auto* e) { return duckdb_v2_connection_register_table_function(connection, function.get(), e); });
 }
 
-const Session& RequireSession(const Session* session, const std::string& function) {
+// (`function` a string_view: a std::string temporary made from a literal looked to GCC's
+// -Wdangling-reference like what the returned reference might point into.)
+const Session& RequireSession(const Session* session, std::string_view function) {
   if (session == nullptr) {
-    throw Error(ErrorCode::kSqlError, function + "() is only available in a client session");
+    throw Error(ErrorCode::kSqlError, std::string(function) + "() is only available in a client session");
   }
   return *session;
 }

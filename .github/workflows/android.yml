@@ -71,6 +71,7 @@ jobs:
   native:
     if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.ui.result == 'success' || inputs.web_ui_artifact != '' || inputs.warm_cache) }}
     needs: [plan, ui]
+    # (x64: the Android NDK ships Linux x86-64 host toolchains only.)
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
@@ -87,7 +88,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4 (Node 24)
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false
@@ -170,6 +171,7 @@ jobs:
   bundle:
     if: ${{ !cancelled() && !inputs.warm_cache && needs.plan.result == 'success' && needs.native.result == 'success' }}
     needs: [plan, native]
+    # (x64: the Android SDK's build tools, aapt2 among them, ship Linux x86-64 binaries only.)
     runs-on: ubuntu-24.04
     environment: ${{ needs.plan.outputs.sign == 'true' && 'android-signing' || '' }}
     env:
@@ -180,7 +182,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4 (Node 24)
         with:
           packages: platform-tools
           log-accepted-android-sdk-licenses: false

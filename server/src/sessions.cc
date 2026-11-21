@@ -33,7 +33,7 @@ std::optional<std::size_t> CancelSessionWork(Runtime& runtime, const std::string
 
 SessionRegistry::Lookup SessionRegistry::Find(const std::string& id, const Session& viewer) const {
   const std::string wanted = Lowered(id);
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   auto it = sessions_.find(wanted);
   if (it == sessions_.end() || it->second.session->killed()) return Lookup::kNotFound;
   if (it->second.session == &viewer) return Lookup::kOwnSession;
@@ -42,7 +42,7 @@ SessionRegistry::Lookup SessionRegistry::Find(const std::string& id, const Sessi
 
 bool SessionRegistry::Admit(const chargewire::Principal& principal) {
   if (principal.role == "admin" || max_sessions_ <= 0) return false;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   if (capped_in_use_ >= max_sessions_) {
     throw Error(ErrorCode::kTooManySessions,
                 "this server already has its max-sessions limit of " + std::to_string(max_sessions_) +
@@ -54,17 +54,17 @@ bool SessionRegistry::Admit(const chargewire::Principal& principal) {
 
 void SessionRegistry::Unadmit(bool capped) {
   if (!capped) return;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   capped_in_use_ = std::max<int64_t>(0, capped_in_use_ - 1);
 }
 
 void SessionRegistry::Add(Session* session, bool capped) {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   sessions_[session->id()] = {session, capped};
 }
 
 void SessionRegistry::Remove(Session* session) {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   auto it = sessions_.find(session->id());
   if (it == sessions_.end()) return;
   if (it->second.capped) capped_in_use_ = std::max<int64_t>(0, capped_in_use_ - 1);
@@ -73,7 +73,7 @@ void SessionRegistry::Remove(Session* session) {
 
 SessionRegistry::KillResult SessionRegistry::Kill(const std::string& id, const Session& by) {
   const std::string wanted = Lowered(id);
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   auto it = sessions_.find(wanted);
   if (it == sessions_.end() || it->second.session->killed()) return KillResult::kNotFound;
   if (it->second.session == &by) return KillResult::kOwnSession;
@@ -87,7 +87,7 @@ SessionRegistry::KillResult SessionRegistry::Kill(const std::string& id, const S
 }
 
 std::vector<SessionSummary> SessionRegistry::List(const Session& viewer) const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   std::vector<SessionSummary> out;
   for (const auto& [id, entry] : sessions_) {
     const Session& s = *entry.session;
@@ -99,18 +99,18 @@ std::vector<SessionSummary> SessionRegistry::List(const Session& viewer) const {
 }
 
 std::size_t SessionRegistry::size() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return static_cast<std::size_t>(
       std::count_if(sessions_.begin(), sessions_.end(), [](const auto& item) { return !item.second.session->killed(); }));
 }
 
 std::size_t SessionRegistry::capped_in_use() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return static_cast<std::size_t>(capped_in_use_);
 }
 
 void SessionRegistry::ForEach(const std::function<void(Session&)>& fn) const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   for (const auto& [id, entry] : sessions_) fn(*entry.session);
 }
 

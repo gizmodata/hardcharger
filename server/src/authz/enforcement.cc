@@ -3094,7 +3094,7 @@ RbacSessionState::RbacSessionState(std::shared_ptr<RbacEngine> engine, Principal
 std::string RbacSessionState::SystemAdminRefusal() const {
   std::string user_name, unverified;
   {
-    std::lock_guard<std::mutex> lock(principal_mutex_);
+    MutexLock lock(principal_mutex_);
     user_name = principal_.user_name;
     unverified = system_admin_unverified_;
   }
@@ -3108,7 +3108,7 @@ Principal RbacSessionState::principal() const {
   Principal user;
   bool unverified = false;
   {
-    std::lock_guard<std::mutex> lock(principal_mutex_);
+    MutexLock lock(principal_mutex_);
     user = principal_;
     unverified = !system_admin_unverified_.empty();
     user.policy_exemptions_unverified = !policy_exemptions_unverified_.empty();
@@ -3144,7 +3144,7 @@ RbacSessionState::BypassScope::~BypassScope() {
 void RbacSessionState::NoteChecked(int64_t snapshot_version,
                                    std::vector<PendingOwnership> ownership, bool prepare_only,
                                    std::vector<std::string> accesses) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   last_accesses_ = std::move(accesses);
   ++checked_pending_;
   last_checked_version_ = snapshot_version;
@@ -3154,28 +3154,28 @@ void RbacSessionState::NoteChecked(int64_t snapshot_version,
 }
 
 std::vector<std::string> RbacSessionState::TakeAccesses() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   std::vector<std::string> taken;
   taken.swap(last_accesses_);
   return taken;
 }
 
 std::vector<PendingOwnership> RbacSessionState::TakePreparedOwnership() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   std::vector<PendingOwnership> taken;
   taken.swap(prepared_ownership_);
   return taken;
 }
 
 void RbacSessionState::SetActiveRole(std::string role_id, std::string role_name) {
-  std::lock_guard<std::mutex> lock(principal_mutex_);
+  MutexLock lock(principal_mutex_);
   principal_.active_role_id = std::move(role_id);
   principal_.active_role_name = std::move(role_name);
   ++persona_version_;
 }
 
 void RbacSessionState::NoteBindChecked() {
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   bind_checked_pending_ = true;
 }
 
@@ -3186,7 +3186,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
   dd::RebindQueryInfo rebind;
   std::vector<PendingOwnership> to_record;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    MutexLock lock(mutex_);
     rebind = FinalizePrepareLocked(prepared, mode, runs_now);
     if (runs_now) {
       for (const auto& o : pending_ownership_) {
@@ -3203,7 +3203,7 @@ dd::RebindQueryInfo RbacSessionState::OnFinalizePrepare(dd::ClientContext&,
   }
   std::vector<RecordedOwnership> undo;
   auto status = RecordOwnership(to_record, undo);
-  std::lock_guard<std::mutex> lock(mutex_);
+  MutexLock lock(mutex_);
   for (auto& u : undo) recorded_ownership_.push_back(std::move(u));
   if (!status.ok()) {
     pending_ownership_.clear();
@@ -3257,8 +3257,9 @@ dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatemen
     return dd::RebindQueryInfo::DO_NOT_REBIND;
   } else if (!unchecked()) {
     // The plan never reached the check (the optimizer was skipped). Refuse it.
+    const auto user_name = session_principal().user_name;
     Log(LogLevel::kWarning, "a prepared plan reached no access-control check",
-        {{"user", principal_.user_name},
+        {{"user", user_name},
          {"statement_type", dd::StatementTypeToString(prepared.statement_type)},
          {"mode", mode == dd::PreparedStatementMode::PREPARE_ONLY ? "prepare_only" : "prepare_and_execute"},
          {"bound_all_parameters", prepared.properties.bound_all_parameters ? "true" : "false"},
@@ -3271,7 +3272,7 @@ dd::RebindQueryInfo RbacSessionState::FinalizePrepareLocked(dd::PreparedStatemen
     prepared_ownership_.clear();
     throw dd::PermissionException(
         "Hardcharger blocked this statement: access control did not see its plan (it was not planned for this run), "
-        "so it was not run; this is not about user " + principal_.user_name + "'s grants. Run it again, and if it "
+        "so it was not run; this is not about user " + user_name + "'s grants. Run it again, and if it "
         "keeps happening, report it with the server log");
   }
   return dd::RebindQueryInfo::DO_NOT_REBIND;
@@ -3296,7 +3297,7 @@ void RbacSessionState::QueryEnd(dd::ClientContext& context, dd::optional_ptr<dd:
   std::vector<PendingOwnership> pending;
   std::vector<RecordedOwnership> recorded;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    MutexLock lock(mutex_);
     pending.swap(pending_ownership_);
     recorded.swap(recorded_ownership_);
     planned_ownership_.clear();

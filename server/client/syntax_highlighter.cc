@@ -123,24 +123,6 @@ size_t ByteToCodepoint(const std::string& s, size_t byte_pos) {
   return cp;
 }
 
-// Get byte position of the nth codepoint
-size_t CodepointToByte(const std::string& s, size_t cp_pos) {
-  size_t byte = 0;
-  for (size_t cp = 0; cp < cp_pos && byte < s.size(); ++cp) {
-    unsigned char c = s[byte];
-    if (c < 0x80) {
-      byte += 1;
-    } else if ((c & 0xE0) == 0xC0) {
-      byte += 2;
-    } else if ((c & 0xF0) == 0xE0) {
-      byte += 3;
-    } else {
-      byte += 4;
-    }
-  }
-  return byte;
-}
-
 }  // namespace
 
 void SyntaxHighlighter::Highlight(const std::string& input,

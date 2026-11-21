@@ -14,6 +14,7 @@
 
 #include "authz/duckdb_internal.hpp"
 #include "guards.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::authz {
 
@@ -32,13 +33,13 @@ struct CachedPaths {
   std::vector<std::string> paths;
 };
 
-std::mutex& CacheMutex() {
-  static std::mutex mutex;
-  return mutex;
-}
+struct PathCache {
+  Mutex mutex;
+  std::map<std::pair<std::string, const void*>, CachedPaths> entries HC_GUARDED_BY(mutex);
+};
 
-std::map<std::pair<std::string, const void*>, CachedPaths>& Cache() {
-  static std::map<std::pair<std::string, const void*>, CachedPaths> cache;
+PathCache& Cache() {
+  static PathCache cache;
   return cache;
 }
 
@@ -97,18 +98,19 @@ arrow::Result<std::vector<StorageAccess::LakeArea>> StorageAccess::LakeAreas() {
     const auto key = std::make_pair(name, static_cast<const void*>(attached.get()));
     std::vector<std::string> paths;
     bool cached = false;
+    auto& cache = Cache();
     {
-      std::lock_guard lock(CacheMutex());
-      auto it = Cache().find(key);
-      if (it != Cache().end() && std::chrono::steady_clock::now() - it->second.at < kLakePathsFresh) {
+      MutexLock lock(cache.mutex);
+      auto it = cache.entries.find(key);
+      if (it != cache.entries.end() && std::chrono::steady_clock::now() - it->second.at < kLakePathsFresh) {
         paths = it->second.paths;
         cached = true;
       }
     }
     if (!cached) {
       ARROW_ASSIGN_OR_RAISE(paths, DataPaths(db, name));
-      std::lock_guard lock(CacheMutex());
-      Cache()[key] = {std::chrono::steady_clock::now(), paths};
+      MutexLock lock(cache.mutex);
+      cache.entries[key] = {std::chrono::steady_clock::now(), paths};
     }
     for (const auto& path : paths) {
       auto area = ParseStoragePath(path, local_, /*allow_pattern=*/false);
@@ -202,8 +204,9 @@ std::optional<std::string> StorageAccess::Refusal(const Snapshot& snapshot, cons
 
 std::vector<std::string> KnownLakeDataPaths() {
   std::vector<std::string> paths;
-  std::lock_guard lock(CacheMutex());
-  for (const auto& [key, cached] : Cache()) paths.insert(paths.end(), cached.paths.begin(), cached.paths.end());
+  auto& cache = Cache();
+  MutexLock lock(cache.mutex);
+  for (const auto& [key, cached] : cache.entries) paths.insert(paths.end(), cached.paths.begin(), cached.paths.end());
   return paths;
 }
 

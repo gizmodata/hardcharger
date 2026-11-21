@@ -85,7 +85,8 @@ std::vector<std::string> SplitList(const std::string& value) {
 }
 
 // clang-format off
-// Each expands to the option's setter and its getter.
+// Each expands to the option's setter and its getter. (windows.h defines a TEXT() of its own.)
+#undef TEXT
 #define TEXT(field) [](Config& c, const std::string& v) { c.field = v; }, \
                     [](const Config& c) { return c.field; }
 #define NUMBER(field) [](Config& c, const std::string& v) { c.field = ParseInt(#field, v); }, \

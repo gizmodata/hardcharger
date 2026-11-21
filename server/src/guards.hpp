@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "sql_text.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger {
 
@@ -77,9 +78,9 @@ class SensitivePaths {
   bool enabled_;
   std::atomic<bool> active_{false};
   std::string home_;
-  mutable std::mutex mutex_;
-  std::vector<Entry> entries_;
-  std::vector<std::string> allowed_keys_;
+  mutable Mutex mutex_;
+  std::vector<Entry> entries_ HC_GUARDED_BY(mutex_);
+  std::vector<std::string> allowed_keys_ HC_GUARDED_BY(mutex_);
 };
 
 // The refusal of `path` (a protected path in `category`).
@@ -126,16 +127,16 @@ class PrivateFiles {
 
  private:
   struct Keyed {
-    Entry entry;
-    std::vector<std::string> keys;  // of the file and each file beside it
-    std::vector<std::string> twins; // the tmp_ twins' keys
-    std::vector<std::string> names; // the file names of all of them (case-folded where the file system is)
+    Entry entry{};
+    std::vector<std::string> keys{};   // of the file and each file beside it
+    std::vector<std::string> twins{};  // the tmp_ twins' keys
+    std::vector<std::string> names{};  // the file names of all of them (case-folded where the file system is)
   };
   std::vector<std::string> CandidateKeys(const std::string& path, bool resolve) const;
 
   std::string home_;
-  mutable std::mutex mutex_;
-  std::vector<Keyed> entries_;
+  mutable Mutex mutex_;
+  std::vector<Keyed> entries_ HC_GUARDED_BY(mutex_);
 };
 
 // The refusal of `path`, one of the PrivateFiles (`category`).

@@ -100,11 +100,11 @@ char ReadKey() {
     switch (seq[1]) {
       case 'A': return 'k';  // Up arrow
       case 'B': return 'j';  // Down arrow
-      case '5':              // Page Up: ESC[5~
-        read(STDIN_FILENO, &seq[2], 1);
+      case '5':              // Page Up: ESC[5~ (the '~' is read and dropped)
+        if (read(STDIN_FILENO, &seq[2], 1) != 1) return 'q';
         return 'p';
       case '6':              // Page Down: ESC[6~
-        read(STDIN_FILENO, &seq[2], 1);
+        if (read(STDIN_FILENO, &seq[2], 1) != 1) return 'q';
         return 'n';
       case 'H': return 'g';  // Home
       case 'F': return 'G';  // End
@@ -141,10 +141,6 @@ char ReadKey() {
 }
 
 #endif
-
-void ClearLine() {
-  std::cout << "\r\033[K" << std::flush;
-}
 
 }  // namespace
 

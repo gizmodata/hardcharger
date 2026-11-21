@@ -596,7 +596,7 @@ StoreTurn::~StoreTurn() {
 }
 
 arrow::Status RbacStore::Lock(StoreTurn& turn) {
-  std::unique_lock lock(turn_mutex_);
+  UniqueMutexLock lock(turn_mutex_);
   const uint64_t ticket = next_ticket_++;
   // Checked at every handover, and between them often enough to notice a hang well within
   // the timeout. The callers ahead may take long (reading a large store is work of their
@@ -609,14 +609,14 @@ arrow::Status RbacStore::Lock(StoreTurn& turn) {
       abandoned_.insert(ticket);
       return link_->TimedOut();
     }
-    turn_cv_.wait_for(lock, check);
+    turn_cv_.wait_for(lock.native(), check);
   }
   turn.store_ = this;
   return arrow::Status::OK();
 }
 
 void RbacStore::Unlock() {
-  std::lock_guard lock(turn_mutex_);
+  MutexLock lock(turn_mutex_);
   ++serving_;
   while (abandoned_.erase(serving_) > 0) ++serving_;
   turn_cv_.notify_all();

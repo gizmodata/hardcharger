@@ -23,6 +23,7 @@
 
 #include "duckdb_v2.hpp"
 #include "logging.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger {
 
@@ -67,11 +68,11 @@ class CatalogLog {
   std::string table_;
   chargewire_duckdb::Connection connection_;
 
-  std::mutex mutex_;
+  Mutex mutex_;
   std::condition_variable wake_;
-  std::deque<LogRecord> queue_;
-  uint64_t dropped_ = 0;
-  bool stopping_ = false;
+  std::deque<LogRecord> queue_ HC_GUARDED_BY(mutex_);
+  uint64_t dropped_ HC_GUARDED_BY(mutex_) = 0;
+  bool stopping_ HC_GUARDED_BY(mutex_) = false;
   std::thread writer_;
 };
 

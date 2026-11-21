@@ -266,7 +266,8 @@ std::string VariantJson(const arrow::Scalar& scalar) {
     std::string out = "{";
     for (size_t i = 0; i < row.value.size(); ++i) {
       if (i) out += ',';
-      out += boost::json::serialize(boost::json::value(scalar.type->field(i)->name())) + ':' + VariantJson(*row.value[i]);
+      out += boost::json::serialize(boost::json::value(scalar.type->field(static_cast<int>(i))->name())) + ':' +
+             VariantJson(*row.value[i]);
     }
     return out + '}';
   }
@@ -314,7 +315,7 @@ std::string WideIntegerText(const uint8_t* bytes, bool is_signed) {
   if (negative) {  // two's complement: invert and add one
     uint64_t carry = 1;
     for (auto& limb : limbs) {
-      const uint64_t sum = static_cast<uint64_t>(~limb) + carry;
+      const uint64_t sum = (~static_cast<uint64_t>(limb) & 0xFFFFFFFFu) + carry;
       limb = static_cast<uint32_t>(sum);
       carry = sum >> 32;
     }

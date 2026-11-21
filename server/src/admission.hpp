@@ -14,6 +14,8 @@
 #include <list>
 #include <mutex>
 
+#include "thread_annotations.hpp"
+
 namespace hardcharger {
 
 class AdmissionController;
@@ -84,19 +86,19 @@ class AdmissionController {
   enum class WaiterState { kWaiting, kGranted, kGrantedUnlimited };
   struct Waiter {
     std::condition_variable cv;
-    WaiterState state = WaiterState::kWaiting;
+    WaiterState state = WaiterState::kWaiting;  // under the controller's mutex_
   };
 
-  void Promote();  // mutex_ held
-  int64_t QueueBound() const;  // mutex_ held
-  void ReleaseSlot();
+  void Promote() HC_REQUIRES(mutex_);
+  int64_t QueueBound() const HC_REQUIRES(mutex_);
+  void ReleaseSlot() HC_EXCLUDES(mutex_);
 
-  mutable std::mutex mutex_;
-  int64_t limit_ = 0;
-  int64_t max_queued_ = 0;
-  int64_t default_wait_seconds_ = 0;
-  int64_t active_ = 0;
-  std::list<Waiter*> waiters_;  // oldest first
+  mutable Mutex mutex_;
+  int64_t limit_ HC_GUARDED_BY(mutex_) = 0;
+  int64_t max_queued_ HC_GUARDED_BY(mutex_) = 0;
+  int64_t default_wait_seconds_ HC_GUARDED_BY(mutex_) = 0;
+  int64_t active_ HC_GUARDED_BY(mutex_) = 0;
+  std::list<Waiter*> waiters_ HC_GUARDED_BY(mutex_);  // oldest first
 };
 
 }  // namespace hardcharger

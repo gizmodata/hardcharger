@@ -46,6 +46,7 @@
 #include "authz/name_scope.hpp"
 #include "authz/resolver.hpp"
 #include "authz/views.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::authz {
 
@@ -602,18 +603,18 @@ class PolicyRewriter {
     };
     // Answers by name: catalog listings repeat the same table on many rows.
     struct Answers {
-      std::mutex mutex;
-      std::unordered_map<std::string, bool> known;
+      Mutex mutex;
+      std::unordered_map<std::string, bool> known HC_GUARDED_BY(mutex);
     };
     auto answers = std::make_shared<Answers>();
     auto decide = [answers](
                       const std::string& key, const std::function<bool()>& ask) {
       {
-        std::lock_guard<std::mutex> lock(answers->mutex);
+        MutexLock lock(answers->mutex);
         if (auto it = answers->known.find(key); it != answers->known.end()) return it->second;
       }
       const bool listed = ask();
-      std::lock_guard<std::mutex> lock(answers->mutex);
+      MutexLock lock(answers->mutex);
       answers->known.emplace(key, listed);
       return listed;
     };

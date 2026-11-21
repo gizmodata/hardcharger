@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "logging.hpp"
+#include "thread_annotations.hpp"
 
 #include "chargewire/backend.hpp"
 
@@ -51,8 +52,8 @@ class JwtTokenService : public chargewire::TokenService {
   std::shared_ptr<authz::AccessControl> access_;
   // Tokens seen validated (SHA-256), so a token's first use logs at INFO and its
   // repeats only at DEBUG. Bounded: cleared when full.
-  std::mutex seen_mutex_;
-  std::unordered_set<std::string> seen_;
+  Mutex seen_mutex_;
+  std::unordered_set<std::string> seen_ HC_GUARDED_BY(seen_mutex_);
 };
 
 // A random 256-bit key, hex encoded, for servers started without a secret key.

@@ -9,7 +9,8 @@
 # through the `production` environment's OIDC credential) before the zip and the MSI are
 # made from them, and the msi job signs each MSI; without it, everything stays unsigned.
 # With `warm` (server.yml's `windows-warm` job, on a push to main whose tests are skipped),
-# only the compile-cache warm-up jobs at the end run, for the platforms it lists.
+# only the compile-cache warm-up jobs at the end run, for the platforms it lists. With
+# `platforms` (server.yml's `only` input), only those legs are built, tested and packaged.
 name: windows
 
 on:
@@ -33,6 +34,10 @@ on:
         description: Sign the executables and the MSIs (production environment; server.yml decides)
         type: boolean
         default: false
+      platforms:
+        description: A JSON list of the legs to build, test and package (empty for both)
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -42,27 +47,43 @@ defaults:
     shell: bash
 
 jobs:
+  # The legs (the one place they are defined: the build, signing, MSI and warm-up jobs take
+  # theirs from here), as `platforms` (or `warm`) selects them.
+  plan:
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      build_legs: ${{ steps.legs.outputs.build_legs }}
+      legs: ${{ steps.legs.outputs.legs }}
+    steps:
+      - id: legs
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+          # windows-arm64: psycopg-binary and pyarrow publish no win_arm64 wheels, so the
+          # test harnesses run on x64 Python (emulated); the server under test is the native
+          # arm64 build.
+          LEGS: >-
+            [{"name": "windows-amd64", "runner": "windows-latest", "arch": "x64", "wix_arch": "x64",
+              "test_python": "3.14"},
+             {"name": "windows-arm64", "runner": "windows-11-arm", "arch": "arm64", "wix_arch": "arm64",
+              "test_python": "cpython-3.14-windows-x86_64-none"}]
+        run: |
+          platforms="${PLATFORMS:-[\"windows-amd64\",\"windows-arm64\"]}"
+          build=$(jq -c --argjson want "$platforms" '[.[] | select(.name as $n | $want | index($n))]' <<<"$LEGS")
+          [ "$(jq length <<<"$build")" -eq "$(jq length <<<"$platforms")" ] \
+            || { echo "unknown platform in $platforms" >&2; exit 1; }
+          echo "build_legs=$build" | tee -a "$GITHUB_OUTPUT"
+          echo "legs=$(jq -c 'map({(.name): [.]}) | add' <<<"$LEGS")" | tee -a "$GITHUB_OUTPUT"
+
   build:
     name: build and test (${{ matrix.name }})
-    if: inputs.warm == ''
+    needs: plan
+    if: inputs.warm == '' && needs.plan.outputs.build_legs != '[]'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # (Each leg and step marked &name is reused, unchanged, by the compile-cache
-          # warm-up jobs at the end; YAML anchors.)
-          - &leg-windows-amd64
-            name: windows-amd64
-            runner: windows-latest
-            arch: x64
-            test_python: "3.14"
-          - &leg-windows-arm64
-            name: windows-arm64
-            runner: windows-11-arm
-            arch: arm64
-            # psycopg-binary and pyarrow publish no win_arm64 wheels: the test harnesses run
-            # on x64 Python (emulated); the server under test is the native arm64 build.
-            test_python: cpython-3.14-windows-x86_64-none
+        # (Each step marked &name is reused, unchanged, by the compile-cache warm-up jobs at
+        # the end; YAML anchors.)
+        include: ${{ fromJSON(needs.plan.outputs.build_legs) }}
     runs-on: ${{ matrix.runner }}
     env: &build-env
       # OpenSSL from vcpkg: static libraries on the static C runtime (/MT), as everything
@@ -92,6 +113,7 @@ jobs:
 
       # Passes the architecture to vcvarsall (arm64 on the arm64 runner selects the native
       # ARM64-hosted toolchain). Its environment reaches the bash steps too.
+      # (Its latest release, v1.13.0, still declares Node 20; none declares Node 24 yet.)
       - &build-msvc
         uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -108,7 +130,7 @@ jobs:
           echo "version=$VCToolsVersion" >> "$GITHUB_OUTPUT"
           echo "MSVC $VCToolsVersion ($VCToolsInstallDir)"
           # vcvarsall points VCPKG_ROOT at Visual Studio's own copy; use the runner's.
-          echo "VCPKG_ROOT=C:\\vcpkg" >> "$GITHUB_ENV"
+          printf 'VCPKG_ROOT=%s\n' 'C:\vcpkg' >> "$GITHUB_ENV"
           cmake --version | head -1
           ninja --version
 
@@ -119,6 +141,7 @@ jobs:
         run: |
           bin="$(cygpath -u "$RUNNER_TEMP")/bin"
           mkdir -p "$bin"
+          # shellcheck disable=SC2016  # the shim's own text: its $1 and $@ expand when it runs
           printf '#!/usr/bin/env bash\n[ "${1:-}" = -a ] && shift 2\nexec sha256sum "$@"\n' > "$bin/shasum"
           chmod +x "$bin/shasum"
           cygpath -w "$bin" >> "$GITHUB_PATH"
@@ -229,8 +252,9 @@ jobs:
           openssl="/c/vcpkg/installed/$VCPKG_TRIPLET"
           read -ra launcher <<< "$HARDCHARGER_CMAKE_LAUNCHER"
           # vcpkg's toolchain (windows-vcpkg.cmake) finds the libraries DuckDB's built-in
-          # extensions link, as DuckDB's own build did.
-          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          # extensions link, as DuckDB's own build did. HARDCHARGER_WERROR: /WX on Hardcharger's
+          # own code (CI only).
+          cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DHARDCHARGER_WERROR=ON \
                 -DCMAKE_TOOLCHAIN_FILE="$(cygpath -m "$PWD/.github/cmake/windows-vcpkg.cmake")" \
                 -DOPENSSL_ROOT_DIR="$(cygpath -m "$openssl")" -DOPENSSL_USE_STATIC_LIBS=TRUE -DOPENSSL_MSVC_STATIC_RT=TRUE \
                 -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" "${launcher[@]}"
@@ -400,20 +424,21 @@ jobs:
       - name: Package
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         run: |
+          export LC_ALL=C  # the checks below compare sorted globs
           stage="dist/hardcharger-${{ matrix.name }}"
           # The two executables by hand, not `cmake --install`: jwt-cpp's install rules
           # would add its headers (include/) and CMake package files (cmake/).
           mkdir -p "$stage/bin"
           cp server/build/hardcharger-server.exe server/build/hardcharger.exe "$stage/bin/"
           # The server and the client ship, nothing else (never the tests, never a DLL).
-          test "$(ls "$stage/bin" | tr '\n' ' ')" = "hardcharger-server.exe hardcharger.exe "
+          test "$(cd "$stage/bin" && printf '%s ' *)" = "hardcharger-server.exe hardcharger.exe "
           .github/scripts/check-windows-imports.sh "$stage/bin/hardcharger-server.exe" "$stage/bin/hardcharger.exe"
           cp LICENSE CHANGELOG.md THIRD_PARTY_NOTICES.md "$stage/"
           .github/scripts/vcpkg-notices.sh /c/vcpkg "$VCPKG_TRIPLET" >> "$stage/THIRD_PARTY_NOTICES.md"
           # (A POSIX path: GNU tar reads the C: of a Windows one as a remote host.)
           tar -xzOf "$(cygpath -u "$HARDCHARGER_UI_TARBALL")" hardcharger-ui/third-party-notices.txt \
             > "$stage/THIRD_PARTY_NOTICES-web-ui.txt"
-          test "$(export LC_ALL=C; cd "$stage" && printf '%s ' *)" = "CHANGELOG.md LICENSE THIRD_PARTY_NOTICES-web-ui.txt THIRD_PARTY_NOTICES.md bin "
+          test "$(cd "$stage" && printf '%s ' *)" = "CHANGELOG.md LICENSE THIRD_PARTY_NOTICES-web-ui.txt THIRD_PARTY_NOTICES.md bin "
           grep -q "^## Windows: the libraries from vcpkg" "$stage/THIRD_PARTY_NOTICES.md"
           grep -q "^Hardcharger web UI .*: third-party software notices" "$stage/THIRD_PARTY_NOTICES-web-ui.txt"
           "$stage/bin/hardcharger-server.exe" --version
@@ -505,14 +530,12 @@ jobs:
   # signature and changes nothing else, and the zip is checked to differ only there.
   sign:
     name: sign (${{ matrix.name }})
-    needs: build
+    needs: [plan, build]
     if: inputs.sign
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: windows-amd64
-          - name: windows-arm64
+        include: ${{ fromJSON(needs.plan.outputs.build_legs) }}
     runs-on: windows-latest
     environment: production
     permissions:
@@ -596,7 +619,7 @@ jobs:
   # before the install test runs it).
   msi:
     name: msi (${{ matrix.name }})
-    needs: [build, sign]
+    needs: [plan, build, sign]
     if: >-
       ${{ !cancelled() && needs.build.result == 'success'
           && ((inputs.sign && needs.sign.result == 'success') || (!inputs.sign && needs.sign.result == 'skipped')) }}
@@ -608,11 +631,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: windows-amd64
-            wix_arch: x64
-          - name: windows-arm64
-            wix_arch: arm64
+        include: ${{ fromJSON(needs.plan.outputs.build_legs) }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -707,11 +726,11 @@ jobs:
   # platform, since a job's `if` can't see its matrix leg.
   warm-windows-amd64:
     name: warm compile cache (${{ matrix.name }})
+    needs: plan
     if: contains(inputs.warm, '"windows-amd64"')
     strategy:
       matrix:
-        include:
-          - *leg-windows-amd64
+        include: ${{ fromJSON(needs.plan.outputs.legs)['windows-amd64'] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
@@ -757,11 +776,11 @@ jobs:
 
   warm-windows-arm64:
     name: warm compile cache (${{ matrix.name }})
+    needs: plan
     if: contains(inputs.warm, '"windows-arm64"')
     strategy:
       matrix:
-        include:
-          - *leg-windows-arm64
+        include: ${{ fromJSON(needs.plan.outputs.legs)['windows-arm64'] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:

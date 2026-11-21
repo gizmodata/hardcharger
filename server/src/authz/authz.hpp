@@ -41,6 +41,7 @@
 #include "authz/login_events.hpp"
 #include "authz/types.hpp"
 #include "chargewire/backend.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger::authz {
 
@@ -125,25 +126,25 @@ struct CatalogAccessRule {
 
 // Who a session acts for, from its access token.
 struct Identity {
-  std::string user_name;
+  std::string user_name{};
   bool superuser = false;  // the administrator (token role "admin")
   // The fingerprint of the user's password the token was issued against; empty for
   // tokens that did not come from a password sign-in.
-  std::string credential;
-  std::string scope_id;  // a scoped token's store record
+  std::string credential{};
+  std::string scope_id{};  // a scoped token's store record
   // The client certificate the access token is bound to (x5t#S256), or empty. Scoped
   // tokens this identity mints carry it too.
-  std::string certificate_thumbprint;
-  std::string idp_issuer;
-  std::vector<std::string> idp_groups;
+  std::string certificate_thumbprint{};
+  std::string idp_issuer{};
+  std::vector<std::string> idp_groups{};
   // The token's catalog_access rules (catalog_rules_only servers; ignored under RBAC).
-  std::optional<std::vector<CatalogAccessRule>> catalog_access;
+  std::optional<std::vector<CatalogAccessRule>> catalog_access{};
   // The sign-in's role is readonly: the session changes nothing (and never acts as System
   // Admin).
   bool readonly = false;
   // The session's Chargewire id (s_...), for audit records; empty for the server's own
   // sessions (the init SQL's).
-  std::string session_id;
+  std::string session_id{};
 };
 
 // The store user attribute that keeps a provisioned user's token sign-ins readonly
@@ -384,9 +385,10 @@ class AccessControl {
   PasswordStanding StandingOf(const Snapshot& snapshot, const std::string& user_id) const;
   int64_t password_max_age_days_ = 0;
   int64_t password_temporary_max_age_hours_ = 0;
-  std::mutex sessions_mutex_;
-  std::vector<std::weak_ptr<SessionGuard>> sessions_;
-  std::shared_ptr<const Snapshot> seen_;  // the snapshot sessions were last compared with
+  Mutex sessions_mutex_;
+  std::vector<std::weak_ptr<SessionGuard>> sessions_ HC_GUARDED_BY(sessions_mutex_);
+  // The snapshot sessions were last compared with.
+  std::shared_ptr<const Snapshot> seen_ HC_GUARDED_BY(sessions_mutex_);
 };
 
 // One session's side of access control: everything its statements go through. Every
@@ -556,9 +558,12 @@ class SessionGuard : public std::enable_shared_from_this<SessionGuard> {
   // thread only.
   std::string request_id_;
 
-  mutable std::mutex mutex_;  // guards connection_ and ended_ against the store's listener
+  mutable Mutex mutex_;  // guards connection_ and ended_ against the store's listener
+  // Not HC_GUARDED_BY: the session's engine thread reads it without mutex_ while its statements
+  // run, and the one write (Detach(), nulling it) comes from the session's destructor, after the
+  // last statement; every other thread (the store's listener, DuckDB's) reads it under mutex_.
   duckdb_v2_connection_handle connection_;
-  std::optional<std::string> ended_;  // why the session ended
+  std::optional<std::string> ended_ HC_GUARDED_BY(mutex_);  // why the session ended
   std::shared_ptr<std::atomic<int>> busy_;
 };
 

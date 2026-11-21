@@ -23,7 +23,7 @@ void AdmissionSlot::Release() {
 }
 
 void AdmissionController::SetLimit(int64_t limit) {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   limit_ = limit;
   if (limit_ <= 0) {
     // Unlimited now: everyone waiting goes ahead, untracked.
@@ -38,49 +38,49 @@ void AdmissionController::SetLimit(int64_t limit) {
 }
 
 void AdmissionController::SetMaxQueued(int64_t max_queued) {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   max_queued_ = max_queued;
 }
 
 void AdmissionController::SetDefaultMaxQueueWaitSeconds(int64_t seconds) {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   default_wait_seconds_ = seconds < 0 ? 0 : seconds;
 }
 
 AdmissionController::Snapshot AdmissionController::GetSnapshot() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return {limit_, active_, static_cast<int64_t>(waiters_.size()), QueueBound(), default_wait_seconds_};
 }
 
 int64_t AdmissionController::Limit() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return limit_;
 }
 
 int64_t AdmissionController::MaxQueued() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return max_queued_;
 }
 
 int64_t AdmissionController::QueueBound() const { return max_queued_ < 0 ? 8 * limit_ : max_queued_; }
 
 int64_t AdmissionController::EffectiveMaxQueued() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return QueueBound();
 }
 
 int64_t AdmissionController::DefaultMaxQueueWaitSeconds() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return default_wait_seconds_;
 }
 
 int64_t AdmissionController::ActiveCount() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return active_;
 }
 
 int64_t AdmissionController::QueuedCount() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   return static_cast<int64_t>(waiters_.size());
 }
 
@@ -88,7 +88,7 @@ AdmissionSlot AdmissionController::Acquire(bool enforce, int64_t max_wait_second
                                            std::function<bool()> is_aborted,
                                            std::chrono::milliseconds abort_poll) {
   if (!enforce) return {};
-  std::unique_lock lock(mutex_);
+  UniqueMutexLock lock(mutex_);
   if (limit_ <= 0) return {};
   if (is_aborted && is_aborted()) {
     throw Refused{Refusal::kAborted, "the statement was cancelled while queued"};
@@ -119,10 +119,10 @@ AdmissionSlot AdmissionController::Acquire(bool enforce, int64_t max_wait_second
       until = std::min(deadline, std::chrono::steady_clock::now() + abort_poll);
     }
     if (until == std::chrono::steady_clock::time_point::max()) {
-      self.cv.wait(lock, done);
+      self.cv.wait(lock.native(), done);
       finished = true;
     } else {
-      finished = self.cv.wait_until(lock, until, done);
+      finished = self.cv.wait_until(lock.native(), until, done);
     }
   }
   // Nobody granted us anything: we are still in the queue and must leave it ourselves.
@@ -139,7 +139,7 @@ AdmissionSlot AdmissionController::Acquire(bool enforce, int64_t max_wait_second
 }
 
 void AdmissionController::WakeWaiters() {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   for (Waiter* waiter : waiters_) waiter->cv.notify_one();
 }
 
@@ -154,7 +154,7 @@ void AdmissionController::Promote() {
 }
 
 void AdmissionController::ReleaseSlot() {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   if (active_ > 0) --active_;
   Promote();
 }

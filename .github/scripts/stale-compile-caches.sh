@@ -17,7 +17,7 @@
 # Any doubt (an API error, an answer that doesn't parse, no entry anywhere) makes the platform
 # stale: a failed lookup costs one build, never a skipped one.
 #
-# The sanitizer jobs' entries (sccache-v1-linux-amd64-asan-..., -tsan-...) never count.
+# The sanitizer jobs' entries (sccache-v1-linux-arm64-asan-..., -tsan-...) never count.
 set -uo pipefail
 
 repo="${1:?owner/repo}"

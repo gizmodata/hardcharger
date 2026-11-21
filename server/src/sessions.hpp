@@ -14,6 +14,7 @@
 
 #include "chargewire/backend.hpp"
 #include "chargewire/server.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger {
 
@@ -87,9 +88,9 @@ class SessionRegistry {
   };
 
   const int64_t max_sessions_;
-  mutable std::mutex mutex_;
-  std::map<std::string, Entry> sessions_;  // by session id
-  int64_t capped_in_use_ = 0;
+  mutable Mutex mutex_;
+  std::map<std::string, Entry> sessions_ HC_GUARDED_BY(mutex_);  // by session id
+  int64_t capped_in_use_ HC_GUARDED_BY(mutex_) = 0;
 };
 
 }  // namespace hardcharger

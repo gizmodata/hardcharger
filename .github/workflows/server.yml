@@ -7,7 +7,9 @@
 # What runs where (the `changes` job decides):
 #   - a v* tag: everything, the sanitizers included, always (the release gate);
 #   - a manual run (workflow_dispatch) or a pull request: everything but the sanitizers
-#     (ASan, TSan), which a manual run adds with `full`;
+#     (ASan with UBSan, TSan), which a manual run adds with `full`;
+#   - a manual run with `only`: one build leg, Windows leg or job and what it needs, nothing
+#     else (to prove a fix there before the whole matrix runs; .github/scripts/select-jobs.sh);
 #   - a push to main: when the same commit already passed this workflow in a push or
 #     manual run (main moves by fast-forwarding a branch that ran it), no tests at all:
 #     the image job publishes `:main` from that run's tested tarballs, and the
@@ -30,9 +32,10 @@ name: server
 
 # Not for changes that build, test and package nothing: the documentation (docs/, Markdown
 # other than the CHANGELOG.md and THIRD_PARTY_NOTICES.md the tarballs ship, the notices'
-# texts and the UI's Markdown, which its lint checks), the
-# benchmarks (bench/), the Python package (python/, workflow.yml), the other workflows and
-# the docs' version-label check (.github/scripts/check_no_version_labels.py, run by workflow.yml).
+# texts and the UI's Markdown, which its lint checks), the benchmarks (bench/), the Python
+# package (python/, workflow.yml), the other workflows, the repository settings files
+# (CODEOWNERS, Dependabot, the issue forms) and the docs' version-label check
+# (.github/scripts/check_no_version_labels.py, run by workflow.yml).
 # Path filters never apply to tags; a manual run is always available.
 on:
   push:
@@ -50,6 +53,9 @@ on:
       - "ui/**/*.md"
       - "server/third-party-notices/**"
       - "!.github/ISSUE_TEMPLATE/**"
+      - "!.github/CODEOWNERS"
+      - "!.github/dependabot.yml"
+      - "!.github/workflows/codeql.yml"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
       - "!.github/workflows/homebrew.yml"
@@ -66,14 +72,34 @@ on:
       - "ui/**/*.md"
       - "server/third-party-notices/**"
       - "!.github/ISSUE_TEMPLATE/**"
+      - "!.github/CODEOWNERS"
+      - "!.github/dependabot.yml"
+      - "!.github/workflows/codeql.yml"
       - "!.github/workflows/workflow.yml"
       - "!.github/workflows/dockerhub-check.yml"
       - "!.github/workflows/homebrew.yml"
       - "!.github/scripts/check_no_version_labels.py"
   workflow_dispatch:
     inputs:
+      only:
+        description: Run only this build leg or job (and what it needs), to prove a fix before the whole matrix
+        type: choice
+        default: all
+        options:
+          - all
+          - linux-amd64
+          - linux-amd64-baseline
+          - linux-arm64
+          - macos-arm64
+          - windows-amd64
+          - windows-arm64
+          - web-ui
+          - asan
+          - tsan
+          - ios
+          - android
       full:
-        description: Also run the AddressSanitizer and ThreadSanitizer jobs (tags always do)
+        description: Also run the sanitizer jobs (AddressSanitizer with UndefinedBehaviorSanitizer, ThreadSanitizer; tags always do)
         type: boolean
         default: false
       failure_repro:
@@ -127,7 +153,7 @@ jobs:
     name: web UI (build)
     needs: changes
     if: needs.changes.outputs.tested != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -169,10 +195,36 @@ jobs:
       tested_run: ${{ steps.tested.outputs.run }}
       warm: ${{ steps.warm.outputs.warm }}
       sign: ${{ steps.sign.outputs.sign }}
+      build_legs: ${{ steps.select.outputs.build_legs }}
+      portable_legs: ${{ steps.select.outputs.portable_legs }}
+      legs: ${{ steps.select.outputs.legs }}
+      windows_platforms: ${{ steps.select.outputs.windows_platforms }}
+      run_ui: ${{ steps.select.outputs.run_ui }}
+      run_asan: ${{ steps.select.outputs.run_asan }}
+      run_tsan: ${{ steps.select.outputs.run_tsan }}
+      run_ios: ${{ steps.select.outputs.run_ios }}
+      run_android: ${{ steps.select.outputs.run_android }}
+      run_rest: ${{ steps.select.outputs.run_rest }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # The build job's legs (the one place they are defined: the compile-cache warm-up jobs
+      # take theirs from here too), and what a manual run's `only` keeps of the jobs
+      # (.github/scripts/select-jobs.sh; any other event keeps everything).
+      # The Linux servers are built in manylinux_2_28 (AlmaLinux 8, glibc 2.28), so the
+      # tarballs run on any distribution with glibc 2.28 or newer, not only on the runner
+      # image. Pinned by digest: a new image is a deliberate bump (and a cold dependency
+      # build), never a surprise.
+      - id: select
+        env:
+          ONLY: ${{ inputs.only }}
+          LEGS: >-
+            [{"name": "linux-amd64", "runner": "ubuntu-24.04", "manylinux": "quay.io/pypa/manylinux_2_28_x86_64:2026.10.10-1@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae", "cpu_target": "optimized", "cpu_gate": true},
+             {"name": "linux-amd64-baseline", "runner": "ubuntu-24.04", "manylinux": "quay.io/pypa/manylinux_2_28_x86_64:2026.10.10-1@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae", "cpu_target": "baseline", "qemu_cpu": "kvm64"},
+             {"name": "linux-arm64", "runner": "ubuntu-24.04-arm", "manylinux": "quay.io/pypa/manylinux_2_28_aarch64:2026.10.10-1@sha256:abd1230aa9e4058a74b89d27cd14ba18c0db036d7bfe6e6f219a29ea63c24eb6", "cpu_target": "optimized"},
+             {"name": "macos-arm64", "runner": "macos-15", "cpu_target": "optimized"}]
+        run: .github/scripts/select-jobs.sh | tee -a "$GITHUB_OUTPUT"
       # Whether this run signs the macOS and Windows artifacts: every v* tag, and a manual run
       # with `sign`; nothing else (never a pull request or a push).
       - id: sign
@@ -233,6 +285,9 @@ jobs:
       # Its tests, against a fake gh (about a second).
       - name: Test the compile-cache check
         run: bash .github/scripts/test-stale-compile-caches.sh
+      # The job selection (the `select` step above) for each value of `only`.
+      - name: Test the job selection
+        run: bash .github/scripts/test-select-jobs.sh
       # On main, when the tests are skipped (so no build saves a compile cache there): the
       # build platforms whose compile cache main lacks or has only an old one of
       # (.github/scripts/stale-compile-caches.sh), as a JSON list for the warm-up jobs. Any
@@ -281,8 +336,10 @@ jobs:
   ui-checks:
     name: web UI (lint, typecheck, unit tests, client provenance)
     needs: changes
-    if: needs.changes.outputs.ui == 'true' && needs.changes.outputs.tested != 'true'
-    runs-on: ubuntu-24.04
+    if: >-
+      needs.changes.outputs.ui == 'true' && needs.changes.outputs.tested != 'true'
+      && needs.changes.outputs.run_ui == 'true'
+    runs-on: ubuntu-24.04-arm
     defaults:
       run:
         working-directory: ui
@@ -303,18 +360,20 @@ jobs:
       - name: The vendored client is what its pinned commit builds
         run: node scripts/vendor-chargewire.mjs --verify --rebuild
 
-  # The UI's browser tests, in Chromium and WebKit, against the Linux x86-64 server built in
-  # this run, which serves the UI it embeds (access control on, so PostgreSQL). They fail,
+  # The UI's browser tests, in Chromium and WebKit, against the Linux arm64 server built in
+  # this run (on an Arm runner, as production runs), which serves the UI it embeds (access control on, so PostgreSQL). They fail,
   # never skip, when the server can't start.
   ui-e2e:
     name: web UI e2e (${{ matrix.browser }})
     needs: [changes, build]
-    if: needs.changes.outputs.ui == 'true' && needs.changes.outputs.tested != 'true'
+    if: >-
+      needs.changes.outputs.ui == 'true' && needs.changes.outputs.tested != 'true'
+      && needs.changes.outputs.run_ui == 'true'
     strategy:
       fail-fast: false
       matrix:
         browser: [chromium, webkit]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     services:
       postgres:
         image: postgres:17-alpine
@@ -341,12 +400,12 @@ jobs:
       - run: npm ci
       - uses: actions/download-artifact@v8
         with:
-          name: hardcharger-linux-amd64
+          name: hardcharger-linux-arm64
           path: ${{ runner.temp }}/server
       - name: Unpack the server
         run: |
-          tar -C "$RUNNER_TEMP/server" -xzf "$RUNNER_TEMP/server/hardcharger-linux-amd64.tar.gz"
-          bin="$RUNNER_TEMP/server/hardcharger-linux-amd64/bin/hardcharger-server"
+          tar -C "$RUNNER_TEMP/server" -xzf "$RUNNER_TEMP/server/hardcharger-linux-arm64.tar.gz"
+          bin="$RUNNER_TEMP/server/hardcharger-linux-arm64/bin/hardcharger-server"
           "$bin" --version
           echo "HARDCHARGER_UI_TEST_SERVER_BINARY=$bin" >> "$GITHUB_ENV"
       - run: npx playwright install --with-deps ${{ matrix.browser }}
@@ -366,36 +425,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # The Linux servers are built in manylinux_2_28 (AlmaLinux 8, glibc 2.28), so the
-          # tarballs run on any distribution with glibc 2.28 or newer, not only on the
-          # runner image. Pinned by digest: a new image is a deliberate bump (and a cold
-          # dependency build), never a surprise.
-          # (Each leg and step marked &name is reused, unchanged, by the compile-cache
-          # warm-up jobs below; YAML anchors.)
-          - &leg-linux-amd64
-            name: linux-amd64
-            cpu_target: optimized
-            runner: ubuntu-24.04
-            manylinux: quay.io/pypa/manylinux_2_28_x86_64:2026.10.10-1@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae
-          # The baseline build (issue #62): DuckDB and Arrow for any x86-64 CPU
-          # (server/scripts/cpu-target.sh), for VMs whose CPU model hides AVX2 or SSE4.2, such as
-          # QEMU's kvm64. Same image and tests; `portable` runs its tarball on a kvm64 CPU.
-          - name: linux-amd64-baseline
-            runner: ubuntu-24.04
-            manylinux: quay.io/pypa/manylinux_2_28_x86_64:2026.10.10-1@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae
-            cpu_target: baseline
-          - &leg-linux-arm64
-            name: linux-arm64
-            cpu_target: optimized
-            runner: ubuntu-24.04-arm
-            manylinux: quay.io/pypa/manylinux_2_28_aarch64:2026.10.10-1@sha256:abd1230aa9e4058a74b89d27cd14ba18c0db036d7bfe6e6f219a29ea63c24eb6
-          - &leg-macos-arm64
-            name: macos-arm64
-            cpu_target: optimized
-            runner: macos-15
+        # The legs: the changes job's `select` step (linux-amd64, linux-arm64, macos-arm64; all
+        # of them unless a manual run's `only` names one). (Each step marked &name is reused,
+        # unchanged, by the compile-cache warm-up jobs below; YAML anchors.)
+        include: ${{ fromJSON(needs.changes.outputs.build_legs) }}
     needs: [changes, web-ui]
-    if: needs.changes.outputs.tested != 'true'
+    if: needs.changes.outputs.tested != 'true' && needs.changes.outputs.build_legs != '[]'
     runs-on: ${{ matrix.runner }}
     # The macOS leg of a signing run reads the Apple secrets from the `production`
     # environment; every other leg and run uses none.
@@ -517,14 +552,16 @@ jobs:
         id: build
         run: |
           # (chargewire-client-tests and chargewire-sdk-tests, Chargewire's own tests, build on request.)
+          # HARDCHARGER_WERROR: a warning in Hardcharger's own code fails the build (CI only; on
+          # clang, the macOS leg, that includes -Wthread-safety).
           if [ "$RUNNER_OS" = Linux ]; then
-            server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON \
+            server/scripts/in-manylinux.sh server server/build -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WERROR=ON \
               -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL"
             server/scripts/in-manylinux.sh build server/build --target chargewire-client-tests chargewire-sdk-tests
           else
             read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
             cmake -S server -B server/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                  -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
+                  -DHARDCHARGER_STATIC=ON -DHARDCHARGER_WERROR=ON -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
                   -DOPENSSL_ROOT_DIR="$PWD/server/.deps/openssl-install" -DOPENSSL_USE_STATIC_LIBS=TRUE \
                   "${launcher[@]}"
             cmake --build server/build
@@ -745,6 +782,18 @@ jobs:
           fi
           stage="dist/hardcharger-${{ matrix.name }}"
           server/scripts/check-glibc-baseline.sh "$stage"/bin/*
+      # The Linux binaries are hardened (server/CMakeLists.txt, HARDCHARGER_HARDENING): a
+      # position-independent executable, full RELRO, a non-executable stack, the stack protector
+      # and _FORTIFY_SOURCE. The check is first shown to fail on a program built without them.
+      - name: Check the hardening (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          printf 'int main(void) { return 0; }\n' > "$RUNNER_TEMP/plain.c"
+          cc -O2 -fno-stack-protector -U_FORTIFY_SOURCE -no-pie -Wl,-z,norelro -o "$RUNNER_TEMP/plain" "$RUNNER_TEMP/plain.c"
+          if server/scripts/check-hardening.sh "$RUNNER_TEMP/plain" >/dev/null 2>&1; then
+            echo "the hardening check passed a program built without hardening"; exit 1
+          fi
+          server/scripts/check-hardening.sh "dist/hardcharger-${{ matrix.name }}"/bin/*
       # Nothing shipped may link a library a user's machine may not have: on Linux only
       # glibc's own and the GCC runtime (readelf NEEDED), no RPATH/RUNPATH; on macOS only
       # the OS's /usr/lib and /System/Library/Frameworks (otool -L), no LC_RPATH.
@@ -807,8 +856,7 @@ jobs:
     if: needs.changes.outputs.tested == 'true' && contains(needs.changes.outputs.warm, '"linux-amd64"')
     strategy:
       matrix:
-        include:
-          - *leg-linux-amd64
+        include: ${{ fromJSON(needs.changes.outputs.legs)['linux-amd64'] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
@@ -851,8 +899,7 @@ jobs:
     if: needs.changes.outputs.tested == 'true' && contains(needs.changes.outputs.warm, '"linux-arm64"')
     strategy:
       matrix:
-        include:
-          - *leg-linux-arm64
+        include: ${{ fromJSON(needs.changes.outputs.legs)['linux-arm64'] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
@@ -867,8 +914,7 @@ jobs:
     if: needs.changes.outputs.tested == 'true' && contains(needs.changes.outputs.warm, '"macos-arm64"')
     strategy:
       matrix:
-        include:
-          - *leg-macos-arm64
+        include: ${{ fromJSON(needs.changes.outputs.legs)['macos-arm64'] }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     permissions:
@@ -894,20 +940,20 @@ jobs:
       matrix:
         include:
           - name: asan
-            platform: linux-amd64
+            platform: linux-arm64-ubuntu
             compiler: c++
             packages: ninja-build libssl-dev flex bison
             duckdb-build: server/scripts/build-deps.sh
             duckdb-extra: ""
           - name: tsan
-            platform: linux-amd64-tsan
+            platform: linux-arm64-tsan
             compiler: clang
             packages: clang ninja-build libssl-dev flex bison
             duckdb-build: server/scripts/build-tsan-duckdb.sh
             duckdb-extra: >-
               server/scripts/build-tsan-duckdb.sh server/scripts/duckdb-extensions-tsan.cmake
               server/scripts/duckdb-extensions-ios.cmake server/scripts/build-extension-deps.sh
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm  # the sanitizer jobs' architecture
     timeout-minutes: 180
     permissions:
       contents: read
@@ -977,19 +1023,13 @@ jobs:
   # baseline download, not die with "Illegal instruction" (server/scripts/check-cpu-gate.sh).
   portable:
     name: install on glibc 2.28 (${{ matrix.name }})
-    needs: build
+    needs: [changes, build]
+    if: needs.changes.outputs.portable_legs != '[]'
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: linux-amd64
-            runner: ubuntu-24.04
-            cpu_gate: true
-          - name: linux-amd64-baseline
-            runner: ubuntu-24.04
-            qemu_cpu: kvm64
-          - name: linux-arm64
-            runner: ubuntu-24.04-arm
+        # The Linux legs the build job built (each on its own architecture's runner).
+        include: ${{ fromJSON(needs.changes.outputs.portable_legs) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -1030,19 +1070,24 @@ jobs:
         if: matrix.cpu_gate
         run: bash server/scripts/check-cpu-gate.sh "$QEMU_X86_64" "dist/hardcharger-${{ matrix.name }}.tar.gz"
 
-  # The server and the Chargewire conformance suite again, on an AddressSanitizer build: a
-  # use-after-free that only crashed now and then (borrowed DuckDB handles destroyed) fails
-  # here every time. The suites fail when the server dies or exits non-zero.
+  # The server and the Chargewire conformance suite again, on a build with AddressSanitizer
+  # and UndefinedBehaviorSanitizer: a use-after-free that only crashed now and then (borrowed
+  # DuckDB handles destroyed) fails here every time, and so does undefined behaviour in
+  # Hardcharger's code (signed overflow, a misaligned or null access, a bad shift or enum
+  # value, ...: -fno-sanitize-recover makes the first report abort the process). The suites
+  # fail when the server dies or exits non-zero.
   # On v* tags (the release gate: the image and the release need it to succeed there) and
-  # on a manual run with `full`; never on pull requests, branch runs or pushes to main.
+  # on a manual run with `full` (or `only: asan`); never on pull requests, branch runs or
+  # pushes to main. On Arm, as production runs.
   sanitize:
-    name: address sanitizer (linux-amd64)
+    name: address and undefined-behavior sanitizers (linux-arm64)
     needs: [changes, web-ui]
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.full == true
-    runs-on: ubuntu-24.04
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      || (needs.changes.outputs.run_asan == 'true' && (inputs.full == true || inputs.only == 'asan'))
+    runs-on: ubuntu-24.04-arm
     env:
-      # Six workers starve the instrumented servers on 2 CPUs (password sign-ins time
-      # out); four pass.
+      # Six workers starve the instrumented servers (password sign-ins time out); four pass.
       HARDCHARGER_TEST_XDIST_WORKERS: "4"
     steps:
       - uses: actions/checkout@v7
@@ -1063,7 +1108,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build libssl-dev flex bison
-      # The dependencies, uninstrumented (only the server is built with ASan), each cached on its own.
+      # The dependencies, uninstrumented (only the server is built with the sanitizers), each
+      # cached on its own (platform linux-arm64-ubuntu: the runner's compiler, not manylinux's).
       - name: Toolchain
         id: toolchain
         run: echo "toolchain=$(c++ --version | head -1)" | tee -a "$GITHUB_OUTPUT"
@@ -1071,21 +1117,21 @@ jobs:
         uses: ./.github/actions/dep-cache
         with:
           dependency: arrow
-          platform: linux-amd64
+          platform: linux-arm64-ubuntu
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
       - name: replxx (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: replxx
-          platform: linux-amd64
+          platform: linux-arm64-ubuntu
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
       - name: DuckDB (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: duckdb
-          platform: linux-amd64
+          platform: linux-arm64-ubuntu
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
       - uses: mozilla-actions/sccache-action@v0.0.11
@@ -1093,23 +1139,27 @@ jobs:
         uses: ./.github/actions/sccache-dir
         with:
           mode: restore
-          name: linux-amd64-asan
+          name: linux-arm64-asan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
-      - name: Build the server with AddressSanitizer
+      # UBSan: every check but vptr (DuckDB is an uninstrumented shared library here, and
+      # its classes' type information crosses into the server: vptr reports there are about
+      # that, not about undefined behaviour); the first report aborts.
+      - name: Build the server with AddressSanitizer and UndefinedBehaviorSanitizer
         run: |
           read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
+          sanitize="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover=undefined"
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
             "${launcher[@]}" \
-            -DCMAKE_CXX_FLAGS="-fsanitize=address -fno-omit-frame-pointer" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+            -DCMAKE_CXX_FLAGS="$sanitize -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="$sanitize"
           cmake --build server/build-asan
       - name: sccache directory (save)
         if: always()
         uses: ./.github/actions/sccache-dir
         with:
           mode: save
-          name: linux-amd64-asan
+          name: linux-arm64-asan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Start PostgreSQL
         run: |
@@ -1120,10 +1170,11 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.0
       - name: Test services
         run: docker compose -f server/tests/docker-compose.yml up -d --wait
-      - name: Hardcharger tests (ASan)
+      - name: Hardcharger tests (ASan, UBSan)
         working-directory: server/tests
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-unit-tests
           HARDCHARGER_TEST_CLIENT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
@@ -1135,10 +1186,11 @@ jobs:
           echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
           .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial" --durations=10
           .venv/bin/python -m pytest -q -m serial --durations=5
-      - name: Chargewire conformance suite (ASan)
+      - name: Chargewire conformance suite (ASan, UBSan)
         working-directory: third_party/chargewire/conformance
         env:
           ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
           # tests fail here, where they would otherwise skip, saying so.
@@ -1181,12 +1233,15 @@ jobs:
   # server and conformance suites. Each sanitized process writes its reports to a file;
   # any unsuppressed report fails the job (server/tests/tsan.supp holds the few
   # justified third-party suppressions). OpenSSL and the C++ runtime are the system's.
-  # When it runs: as the address sanitizer job (v* tags, and a manual run with `full`).
+  # When it runs: as the address sanitizer job (v* tags, and a manual run with `full`, or
+  # `only: tsan`). On Arm, as production runs.
   tsan:
-    name: thread sanitizer (linux-amd64)
+    name: thread sanitizer (linux-arm64)
     needs: [changes, web-ui]
-    if: startsWith(github.ref, 'refs/tags/v') || inputs.full == true
-    runs-on: ubuntu-24.04
+    if: >-
+      startsWith(github.ref, 'refs/tags/v')
+      || (needs.changes.outputs.run_tsan == 'true' && (inputs.full == true || inputs.only == 'tsan'))
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 360
     env:
       CC: clang
@@ -1231,7 +1286,7 @@ jobs:
       # instrumented programs (PostgreSQL's configure checks).
       - name: Lower ASLR entropy for TSan
         run: sudo sysctl -w vm.mmap_rnd_bits=28
-      # Instrumented, so their own caches: platform `linux-amd64-tsan`, clang's toolchain.
+      # Instrumented, so their own caches: platform `linux-arm64-tsan`, clang's toolchain.
       - name: Toolchain
         id: toolchain
         run: echo "toolchain=$(clang --version | head -1)" | tee -a "$GITHUB_OUTPUT"
@@ -1239,21 +1294,21 @@ jobs:
         uses: ./.github/actions/dep-cache
         with:
           dependency: arrow
-          platform: linux-amd64-tsan
+          platform: linux-arm64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
       - name: replxx (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: replxx
-          platform: linux-amd64-tsan
+          platform: linux-arm64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-deps.sh
       - name: DuckDB (cached)
         uses: ./.github/actions/dep-cache
         with:
           dependency: duckdb
-          platform: linux-amd64-tsan
+          platform: linux-arm64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
           build: server/scripts/build-tsan-duckdb.sh
           extra-recipes: server/scripts/build-tsan-duckdb.sh server/scripts/duckdb-extensions-tsan.cmake server/scripts/duckdb-extensions-ios.cmake server/scripts/build-extension-deps.sh
@@ -1262,7 +1317,7 @@ jobs:
         uses: ./.github/actions/sccache-dir
         with:
           mode: restore
-          name: linux-amd64-tsan
+          name: linux-arm64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Build the server with ThreadSanitizer
         run: |
@@ -1277,7 +1332,7 @@ jobs:
         uses: ./.github/actions/sccache-dir
         with:
           mode: save
-          name: linux-amd64-tsan
+          name: linux-arm64-tsan
           toolchain: ${{ steps.toolchain.outputs.toolchain }}
       - name: Start PostgreSQL
         run: |
@@ -1395,7 +1450,7 @@ jobs:
   image:
     needs: [changes, build, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android]
     if: >-
-      ${{ !cancelled() && needs.changes.result == 'success'
+      ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.run_rest == 'true'
           && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
           && (needs.changes.outputs.tested == 'true' || needs.build.result == 'success')
           && (!startsWith(github.ref, 'refs/tags/v')
@@ -1412,6 +1467,8 @@ jobs:
       actions: read  # the tested run's artifacts, when this run reuses them
       packages: write
       id-token: write  # Docker Hub's OIDC sign-in
+    # (x64: the smoke test below runs the linux/amd64 image natively; the arm64 half is
+    # built under QEMU here either way, and run in production.)
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -1503,12 +1560,13 @@ jobs:
   # packages, which the checksums and the release take with the tarballs.
   windows:
     needs: [changes, web-ui]
-    if: needs.changes.outputs.tested != 'true'
+    if: needs.changes.outputs.tested != 'true' && needs.changes.outputs.windows_platforms != '[]'
     uses: ./.github/workflows/windows.yml
     secrets: inherit
     with:
       failure_repro: ${{ inputs.failure_repro == true }}
       sign: ${{ needs.changes.outputs.sign == 'true' }}
+      platforms: ${{ needs.changes.outputs.windows_platforms }}
     # actions: read for windows.yml's warm-up jobs (skipped here), id-token: write for its
     # signing jobs' Azure sign-in (used only when signing): a called workflow's jobs may ask
     # only for what the caller grants, checked before any job is skipped.
@@ -1545,7 +1603,10 @@ jobs:
   ios:
     name: iOS app (simulator build and tests)
     needs: [changes, web-ui]
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.ios)
+    if: >-
+      needs.changes.outputs.run_ios == 'true'
+      && (startsWith(github.ref, 'refs/tags/v')
+          || (github.event_name == 'workflow_dispatch' && (inputs.ios || inputs.only == 'ios')))
     runs-on: xcode-27
     timeout-minutes: 180
     steps:
@@ -1622,7 +1683,10 @@ jobs:
   ios-archive:
     name: iOS app (signed device build)
     needs: [changes, web-ui, ios]
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.ios && inputs.sign)
+    if: >-
+      needs.changes.outputs.run_ios == 'true'
+      && (startsWith(github.ref, 'refs/tags/v')
+          || (github.event_name == 'workflow_dispatch' && (inputs.ios || inputs.only == 'ios') && inputs.sign))
     runs-on: xcode-27
     environment: production
     timeout-minutes: 180
@@ -1682,7 +1746,9 @@ jobs:
   verify-macos:
     name: verify signatures (macos-arm64)
     needs: [changes, build]
-    if: needs.changes.outputs.sign == 'true'
+    if: >-
+      needs.changes.outputs.sign == 'true'
+      && (needs.changes.outputs.run_rest == 'true' || inputs.only == 'macos-arm64')
     runs-on: macos-15
     environment: production  # APPLE_TEAM_ID, the team the signature must name
     steps:
@@ -1720,7 +1786,7 @@ jobs:
   verify-windows:
     name: verify signatures (windows)
     needs: [changes, windows]
-    if: needs.changes.outputs.sign == 'true'
+    if: needs.changes.outputs.sign == 'true' && needs.changes.outputs.run_rest == 'true'
     runs-on: windows-11-arm
     defaults:
       run:
@@ -1779,7 +1845,10 @@ jobs:
 
   android:
     needs: [changes, web-ui]
-    if: ${{ !cancelled() && needs.changes.outputs.tested != 'true' && needs.web-ui.result == 'success' && (startsWith(github.ref, 'refs/tags/v') || inputs.android) }}
+    if: >-
+      ${{ !cancelled() && needs.changes.outputs.tested != 'true' && needs.web-ui.result == 'success'
+          && needs.changes.outputs.run_android == 'true'
+          && (startsWith(github.ref, 'refs/tags/v') || inputs.android || inputs.only == 'android') }}
     permissions:
       contents: read
       actions: read

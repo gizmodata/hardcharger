@@ -224,7 +224,7 @@ void JwtTokenService::Accepted(std::string_view token, const chargewire::Princip
     unsigned int length = 0;
     EVP_Digest(token.data(), token.size(), digest.data(), &length, EVP_sha256(), nullptr);
     std::string key(reinterpret_cast<const char*>(digest.data()), length);
-    std::lock_guard lock(seen_mutex_);
+    MutexLock lock(seen_mutex_);
     if (seen_.size() >= kMaxSeen) seen_.clear();
     first_use = seen_.insert(std::move(key)).second;
   }

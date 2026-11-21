@@ -23,18 +23,18 @@ struct Runtime;
 enum class SettingScope { kSession, kGlobal, kSessionOrGlobal, kStartup };
 
 struct Setting {
-  std::string name;  // without the prefix: "query_timeout"
-  SettingScope scope;
-  std::string input_type;     // VARCHAR, INTEGER or BOOLEAN
-  std::string option;         // Hardcharger's configuration option, if any ("query_timeout_seconds")
-  std::string default_value;
-  std::string description;
+  std::string name{};  // without the prefix: "query_timeout"
+  SettingScope scope{};
+  std::string input_type{};  // VARCHAR, INTEGER or BOOLEAN
+  std::string option{};      // Hardcharger's configuration option, if any ("query_timeout_seconds")
+  std::string default_value{};
+  std::string description{};
   bool admin_only = false;  // listed only to admins
-  std::function<std::optional<std::string>(const Session&)> get_session;
-  std::function<std::optional<std::string>(const Runtime&)> get_global;
+  std::function<std::optional<std::string>(const Session&)> get_session{};
+  std::function<std::optional<std::string>(const Runtime&)> get_global{};
   // Both throw chargewire::Error for a bad value. A reset passes std::nullopt.
-  std::function<void(Session&, const std::optional<std::string>&)> set_session;
-  std::function<void(Runtime&, const std::optional<std::string>&)> set_global;
+  std::function<void(Session&, const std::optional<std::string>&)> set_session{};
+  std::function<void(Runtime&, const std::optional<std::string>&)> set_global{};
 };
 
 const std::vector<Setting>& Settings();

@@ -10,6 +10,8 @@
 #include <mutex>
 #include <sstream>
 
+#include "thread_annotations.hpp"
+
 namespace hardcharger {
 
 namespace {
@@ -63,11 +65,11 @@ std::string Canonical(const std::string& prev, std::string_view message,
 }
 
 struct ChainState {
-  std::mutex mutex;
-  std::string id;
-  std::string key;
-  int64_t seq = 0;
-  std::string prev = kGenesis;
+  Mutex mutex;
+  std::string id HC_GUARDED_BY(mutex);
+  std::string key HC_GUARDED_BY(mutex);
+  int64_t seq HC_GUARDED_BY(mutex) = 0;
+  std::string prev HC_GUARDED_BY(mutex) = kGenesis;
 };
 
 ChainState& Chain() {
@@ -88,7 +90,7 @@ std::string NewChainId() {
 // Adds the chain fields to `fields`, and its digest.
 void Seal(LogFields& fields, std::string_view message) {
   auto& chain = Chain();
-  std::lock_guard lock(chain.mutex);
+  MutexLock lock(chain.mutex);
   if (chain.id.empty()) chain.id = NewChainId();
   fields.emplace_back(kChain, chain.id);
   fields.emplace_back(kSeq, std::to_string(++chain.seq));
@@ -130,7 +132,7 @@ std::string Field(const boost::json::object& record, const char* key) {
 void StartAuditChain(const std::string& key) {
   {
     auto& chain = Chain();
-    std::lock_guard lock(chain.mutex);
+    MutexLock lock(chain.mutex);
     chain.id = NewChainId();
     chain.key = key;
     chain.seq = 0;

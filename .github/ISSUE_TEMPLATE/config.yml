@@ -1,0 +1,9 @@
+# Security problems never go in a public issue: the first link sends them to private reporting.
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability (privately)
+    url: https://github.com/gizmodata/hardcharger/security/advisories/new
+    about: Please don't open a public issue for a security problem. Report it privately here, or email security@gizmodata.com (see SECURITY.md).
+  - name: Documentation
+    url: https://docs.hardcharger.gizmodata.com
+    about: Installation, configuration, access control and the client, in the Hardcharger documentation.

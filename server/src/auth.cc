@@ -234,7 +234,7 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
     held.done = true;
     if (guard_) guard_->RecordSuccess(username, context.client_address);
     LogAt(log_level_, LogLevel::kInfo, "signed in", {{"user", LoggableName(username)}, {"method", "password"}});
-    return chargewire::Principal{std::string(username), "admin", "password", {}, {}};
+    return chargewire::Principal{std::string(username), "admin", "password", {}, {}, {}};
   }
   // A user of the access-control store (never under the administrator's name). The
   // token carries a fingerprint of the password, so changing it ends the token.
@@ -261,8 +261,8 @@ chargewire::Principal Authenticator::AuthenticatePassword(std::string_view usern
       if (guard_) guard_->RecordSuccess(username, context.client_address);
       LogAt(log_level_, LogLevel::kInfo, "signed in",
             {{"user", store_user->user_name}, {"method", "password"}, {"role", "user"}});
-      return chargewire::Principal{store_user->user_name, "user", "password",
-                                {{"credential", store_user->credential}}, {}};
+      return chargewire::Principal{
+          store_user->user_name, "user", "password", {{"credential", store_user->credential}}, {}, {}};
     }
   }
   held.done = true;
@@ -427,7 +427,7 @@ chargewire::Principal Authenticator::AuthenticateCertificate(std::string_view id
                         "' is both one of mtls_admin_identities and a user of the access-control "
                         "store; an administrator drops the user or removes the identity");
       }
-      return signed_in(chargewire::Principal{admin, "admin", "client_certificate", {}, {}});
+      return signed_in(chargewire::Principal{admin, "admin", "client_certificate", {}, {}, {}});
     }
   }
   // A URI identity differing from an administrator identity only in case is another
@@ -447,7 +447,7 @@ chargewire::Principal Authenticator::AuthenticateCertificate(std::string_view id
   // Under access control, one of the store's enabled users (a password is not needed).
   if (access_) {
     if (auto user = access_->CertificateUser(name)) {
-      return signed_in(chargewire::Principal{*user, "user", "client_certificate", {}, {}});
+      return signed_in(chargewire::Principal{*user, "user", "client_certificate", {}, {}, {}});
     }
   }
   // The SDK reports the refusal as a security event (logged and audited, rate-limited per

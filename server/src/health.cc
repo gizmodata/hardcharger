@@ -26,7 +26,7 @@ void HealthChecker::RunOnce() {
   }
   last_duration_seconds_ = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
   running_query_ = false;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   if (ok != last_ok_ || !reported_) {
     reported_ = true;
     if (ok) {
@@ -42,7 +42,7 @@ void HealthChecker::RunOnce() {
 
 void HealthChecker::Start() {
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     last_error_ = "the first health check has not finished yet";
     last_finished_ = std::chrono::steady_clock::now();  // staleness counts from the start
   }
@@ -51,29 +51,29 @@ void HealthChecker::Start() {
 }
 
 void HealthChecker::Loop() {
-  std::unique_lock lock(mutex_);
+  UniqueMutexLock lock(mutex_);
   while (!stopping_) {
-    lock.unlock();
+    lock.Unlock();
     RunOnce();
-    lock.lock();
-    wake_.wait_for(lock, interval_, [this] { return stopping_; });
+    lock.Lock();
+    wake_.wait_for(lock.native(), interval_, [this]() HC_REQUIRES(mutex_) { return stopping_; });
   }
   exited_ = true;
   wake_.notify_all();
 }
 
 void HealthChecker::Stop() {
-  std::unique_lock lock(mutex_);
+  UniqueMutexLock lock(mutex_);
   if (!thread_.joinable()) return;
   stopping_ = true;
   wake_.notify_all();
   // A hung check holds the thread: interrupt it, and give up waiting after 5 s.
   for (int i = 0; i < 50 && !exited_; i++) {
     if (running_query_) duckdb_v2_connection_interrupt(connection_.get(), nullptr);
-    wake_.wait_for(lock, std::chrono::milliseconds(100), [this] { return exited_; });
+    wake_.wait_for(lock.native(), std::chrono::milliseconds(100), [this]() HC_REQUIRES(mutex_) { return exited_; });
   }
   if (exited_) {
-    lock.unlock();
+    lock.Unlock();
     thread_.join();
     return;
   }
@@ -84,7 +84,7 @@ void HealthChecker::Stop() {
 }
 
 void HealthChecker::Check() const {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   const auto age = std::chrono::steady_clock::now() - last_finished_;
   if (age > staleness_) {
     throw std::runtime_error("the last health check finished " +

@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "duckdb_v2.hpp"
+#include "thread_annotations.hpp"
 
 namespace hardcharger {
 
@@ -201,18 +202,19 @@ class Instrumentation {
   std::string schema_;
   chargewire_duckdb::Connection connection_;
 
-  std::mutex monitor_mutex_;
-  std::unordered_map<std::string, ExecutionRecord> monitor_;
-  std::size_t monitor_finished_bytes_ = 0;
-  std::deque<std::string> monitor_finished_;  // bounded bridge until history is written
+  Mutex monitor_mutex_;
+  std::unordered_map<std::string, ExecutionRecord> monitor_ HC_GUARDED_BY(monitor_mutex_);
+  std::size_t monitor_finished_bytes_ HC_GUARDED_BY(monitor_mutex_) = 0;
+  // A bounded bridge until history is written.
+  std::deque<std::string> monitor_finished_ HC_GUARDED_BY(monitor_mutex_);
 
-  std::mutex mutex_;
+  Mutex mutex_;
   std::condition_variable wake_;
-  std::deque<Event> queue_;
-  std::size_t queued_bytes_ = 0;
-  bool stopping_ = false;
-  bool stopped_ = false;
-  std::chrono::steady_clock::time_point drain_until_;
+  std::deque<Event> queue_ HC_GUARDED_BY(mutex_);
+  std::size_t queued_bytes_ HC_GUARDED_BY(mutex_) = 0;
+  bool stopping_ HC_GUARDED_BY(mutex_) = false;
+  bool stopped_ HC_GUARDED_BY(mutex_) = false;
+  std::chrono::steady_clock::time_point drain_until_ HC_GUARDED_BY(mutex_);
   std::atomic<int64_t> write_delay_ms_{0};  // tests only
   std::thread writer_;
 };

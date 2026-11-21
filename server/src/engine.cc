@@ -1217,7 +1217,7 @@ chargewire::StatementOutcome Session::Guarded(std::string_view sql, bool has_par
 
 void Session::FinishRunning() {
   if (--running_ <= 0) {
-    std::lock_guard lock(activity_mutex_);
+    MutexLock lock(activity_mutex_);
     activity_.statement.clear();
     activity_.statement_started_us = 0;
   }
@@ -1274,7 +1274,7 @@ void Session::Interrupt() {
 
 void Session::Cancel(std::string_view reason) {
   {
-    std::lock_guard lock(activity_mutex_);
+    MutexLock lock(activity_mutex_);
     if (activity_.cancel_reason.empty()) activity_.cancel_reason = std::string(reason);
   }
   Interrupt();
@@ -1283,24 +1283,24 @@ void Session::Cancel(std::string_view reason) {
 void Session::BeginStatement() {
   interrupted_ = false;
   read_only_function_refused_ = false;
-  std::lock_guard lock(activity_mutex_);
+  MutexLock lock(activity_mutex_);
   activity_.cancel_reason.clear();
 }
 
 std::string Session::cancel_reason() const {
-  std::lock_guard lock(activity_mutex_);
+  MutexLock lock(activity_mutex_);
   return activity_.cancel_reason;
 }
 
 Session::Activity Session::activity() const {
-  std::lock_guard lock(activity_mutex_);
+  MutexLock lock(activity_mutex_);
   return activity_;
 }
 
 std::string Session::tenant() const { return guard_ ? guard_->tenant_name() : std::string(); }
 
 Session::Settings Session::settings() const {
-  std::lock_guard lock(settings_mutex_);
+  MutexLock lock(settings_mutex_);
   return settings_;
 }
 
@@ -1323,7 +1323,7 @@ std::string Session::StatementQueryTag() const {
 }
 
 void Session::UpdateSettings(const std::function<void(Settings&)>& update) {
-  std::lock_guard lock(settings_mutex_);
+  MutexLock lock(settings_mutex_);
   update(settings_);
 }
 
@@ -1334,14 +1334,14 @@ void Session::LogQuery(LogLevel level, std::string_view message, const LogFields
 }
 
 LogLevel Session::QueryLogLevel() const {
-  std::lock_guard lock(settings_mutex_);
+  MutexLock lock(settings_mutex_);
   return settings_.query_log_level.value_or(runtime_.query_log_level.load());
 }
 
 std::optional<std::chrono::milliseconds> Session::DefaultStatementTimeout() {
   std::optional<int64_t> seconds;
   {
-    std::lock_guard lock(settings_mutex_);
+    MutexLock lock(settings_mutex_);
     seconds = settings_.query_timeout;
   }
   return std::chrono::milliseconds(1000 * seconds.value_or(runtime_.query_timeout_seconds.load()));
@@ -1350,7 +1350,7 @@ std::optional<std::chrono::milliseconds> Session::DefaultStatementTimeout() {
 std::optional<std::chrono::seconds> Session::IdleInTransactionTimeout() {
   std::optional<int64_t> seconds;
   {
-    std::lock_guard lock(settings_mutex_);
+    MutexLock lock(settings_mutex_);
     seconds = settings_.idle_in_transaction_session_timeout;
   }
   return std::chrono::seconds(seconds.value_or(runtime_.idle_in_transaction_session_timeout.load()));
@@ -1547,14 +1547,14 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, const TrackedTex
       instrumentation->ExecutionQueued(record);
     }
     if (!bypass) {
-      std::lock_guard lock(activity_mutex_);
+      MutexLock lock(activity_mutex_);
       activity_.queued_since_us = NowMicros();
       activity_.statement = statement_text;
     }
     struct Unqueued {
       Session& session;
       ~Unqueued() {
-        std::lock_guard lock(session.activity_mutex_);
+        MutexLock lock(session.activity_mutex_);
         session.activity_.queued_since_us = 0;
         if (session.running_ <= 0) session.activity_.statement.clear();
       }
@@ -1598,7 +1598,7 @@ chargewire::StatementOutcome Session::Track(StatementKind kind, const TrackedTex
 
   running_++;
   {
-    std::lock_guard lock(activity_mutex_);
+    MutexLock lock(activity_mutex_);
     activity_.statement = std::move(statement_text);
     activity_.statement_started_us = NowMicros();
   }
@@ -1905,7 +1905,7 @@ int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<
   }
   BeginStatement();
   {
-    std::lock_guard lock(activity_mutex_);
+    MutexLock lock(activity_mutex_);
     std::string into;
     for (const std::string* part : {&target.catalog, &target.schema}) {
       if (!part->empty()) into += SqlIdentifier(*part) + ".";
@@ -1917,7 +1917,7 @@ int64_t Session::Ingest(const chargewire::IngestTarget& target, std::shared_ptr<
   struct Ingested {
     Session& session;
     ~Ingested() {
-      std::lock_guard lock(session.activity_mutex_);
+      MutexLock lock(session.activity_mutex_);
       session.activity_.ingesting = false;
       if (session.running_ <= 0) {
         session.activity_.statement.clear();
@@ -2004,7 +2004,7 @@ chargewire::OptionErrors Session::SetOptions(const json::object& options) {
   }
   auto errors = DuckDBSession::SetOptions(options);
   if (const auto* tag = options.if_contains("session_tag"); tag != nullptr && !errors.contains("session_tag")) {
-    std::lock_guard lock(activity_mutex_);
+    MutexLock lock(activity_mutex_);
     activity_.session_tag_option = tag->is_null() ? std::string() : json::serialize(*tag);
   }
   if (guard_) {

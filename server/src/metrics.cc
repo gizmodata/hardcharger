@@ -165,7 +165,7 @@ Metrics::Metrics() { queue_wait_.bounds = DurationBounds(); }
 void Metrics::RecordStatement(StatementKind kind, std::string_view status, std::string_view error_class,
                               double seconds) {
   if (!enabled_) return;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   counters_[{"hardcharger_statements_total", {{"status", std::string(status)}}}] += 1;
   if (status == "error") {
     counters_[{"hardcharger_statement_errors_total", {{"class", std::string(error_class)}}}] += 1;
@@ -177,36 +177,36 @@ void Metrics::RecordStatement(StatementKind kind, std::string_view status, std::
 
 void Metrics::CountSessionOpened() {
   if (!enabled_) return;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   counters_[{"hardcharger_sessions_opened_total", {}}] += 1;
 }
 
 void Metrics::CountSessionReaped() {
   if (!enabled_) return;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   counters_[{"hardcharger_sessions_reaped_total", {}}] += 1;
 }
 
 void Metrics::CountQueueRejected() {
   if (!enabled_) return;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   counters_[{"hardcharger_queue_rejected_total", {}}] += 1;
 }
 
 void Metrics::CountQueueBypass() {
   if (!enabled_) return;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   counters_[{"hardcharger_queue_admin_bypass_total", {}}] += 1;
 }
 
 void Metrics::ObserveQueueWait(double seconds) {
   if (!enabled_) return;
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   queue_wait_.Observe(seconds);
 }
 
 void Metrics::AddCollector(std::function<void(std::vector<Sample>&)> collector) {
-  std::lock_guard lock(mutex_);
+  MutexLock lock(mutex_);
   collectors_.push_back(std::move(collector));
 }
 
@@ -214,7 +214,7 @@ std::vector<Sample> Metrics::Snapshot() const {
   std::vector<Sample> samples;
   std::vector<std::function<void(std::vector<Sample>&)>> collectors;
   {
-    std::lock_guard lock(mutex_);
+    MutexLock lock(mutex_);
     // Families that start at zero, so a scrape shows them before the first event.
     for (const char* status : {"ok", "error", "cancelled"}) {
       auto key = std::make_pair(std::string("hardcharger_statements_total"), Labels{{"status", status}});

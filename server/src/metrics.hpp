@@ -14,6 +14,8 @@
 #include <string_view>
 #include <vector>
 
+#include "thread_annotations.hpp"
+
 namespace hardcharger {
 
 enum class StatementKind { kRead, kWrite, kDdl, kOther };
@@ -66,11 +68,11 @@ class Metrics {
   };
 
   std::atomic<bool> enabled_ = false;
-  mutable std::mutex mutex_;
-  std::map<std::pair<std::string, Labels>, double> counters_;
-  std::map<Labels, Histogram> durations_;  // by kind
-  Histogram queue_wait_;
-  std::vector<std::function<void(std::vector<Sample>&)>> collectors_;
+  mutable Mutex mutex_;
+  std::map<std::pair<std::string, Labels>, double> counters_ HC_GUARDED_BY(mutex_);
+  std::map<Labels, Histogram> durations_ HC_GUARDED_BY(mutex_);  // by kind
+  Histogram queue_wait_ HC_GUARDED_BY(mutex_);
+  std::vector<std::function<void(std::vector<Sample>&)>> collectors_ HC_GUARDED_BY(mutex_);
 };
 
 // HELP text and TYPE of a family, for rendering ("" if unknown).
