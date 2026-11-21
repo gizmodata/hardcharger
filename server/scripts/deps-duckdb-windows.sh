@@ -16,7 +16,9 @@ export CHARGEWIRE_DEPS_DIR="${HARDCHARGER_DEPS_DIR:-$HERE/.deps}"
 [ -n "${CMAKE_TOOLCHAIN_FILE:-}" ] || { echo "set CMAKE_TOOLCHAIN_FILE (.github/cmake/windows-vcpkg.cmake)" >&2; exit 1; }
 
 source "$HERE/scripts/duckdb-source.sh"
-SRC="$CHARGEWIRE_DEPS_DIR/duckdb"
+# Earlier releases applied patches directly to the cached DuckDB checkout. Keep
+# that worktree and its CMake build directory intact when switching to the fork.
+SRC="$CHARGEWIRE_DEPS_DIR/hardcharger-engine/duckdb"
 prepare_duckdb_source
 
 # Windows keeps DuckDB's standard static-extension link behavior (DLL exports are C API).
@@ -29,11 +31,3 @@ THIRD_PARTY="$CHARGEWIRE_DEPS_DIR/duckdb-install/include/duckdb_third_party"
 rm -rf "$THIRD_PARTY" && mkdir -p "$THIRD_PARTY"
 cp -R "$SRC/third_party/fmt/include/fmt" "$SRC/third_party/re2/re2" \
   "$SRC/third_party/fast_float/fast_float" "$THIRD_PARTY/"
-grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
-  || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
-grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
-  || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
-grep -q "Hardcharger: under the default 'hosts'" "$SRC/src/main/extension/extension_repository_manager.cpp" \
-  || { echo "DuckDB lost the extension repository opt-in patch" >&2; exit 1; }
-grep -q next_update_ms "$SRC/src/common/progress_bar/progress_bar.cpp" \
-  || { echo "DuckDB lost the progress estimate throttle patch" >&2; exit 1; }

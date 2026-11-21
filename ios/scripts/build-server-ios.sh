@@ -7,7 +7,7 @@
 #   ios/build/HardchargerServer.xcframework   (the app links it; module HardchargerServer)
 #
 # The dependencies are server/scripts' own recipes at their pinned versions (OpenSSL,
-# Arrow, DuckDB with the same patches and built-in extensions, CRoaring, libpq, libcurl,
+# Arrow, Hardcharger Engine with its built-in extensions, CRoaring, libpq, libcurl,
 # replxx),
 # run with HARDCHARGER_IOS_SDK and ios/cmake/ios.toolchain.cmake, so the app runs the same
 # server as every other platform. Each platform's build is kept in ios/build/<sdk>/ and
@@ -78,12 +78,16 @@ for sdk in "$@"; do
     fi
     # DuckDB: the stamp names the pinned commit and the recipe files, so a bump rebuilds.
     duckdb_key=$( (cat "$ROOT/server/scripts/duckdb-source.sh";
-                   cat "$ROOT"/server/scripts/patch-duckdb*.cmake "$ROOT/server/scripts/duckdb-extensions-ios.cmake" \
+                   cat "$ROOT/server/scripts/install-engine-sdk.py" "$ROOT/server/scripts/duckdb-extensions-ios.cmake" \
                        "$ROOT/server/scripts/retire-ducklake-patch.cmake" \
                        "$ROOT/server/scripts/deps-duckdb.sh" "$ROOT/server/scripts/build-extension-deps.sh") \
                  | shasum -a 256 | cut -c1-16)
     if [ ! -f "$DEPS/duckdb-install/.ios-duckdb-$duckdb_key.stamp" ]; then
-      "$ROOT/server/scripts/build-deps.sh" duckdb
+      if [ "${GITHUB_ACTIONS:-}" = true ]; then
+        python3 "$ROOT/server/scripts/install-engine-sdk.py" "ios-$sdk" "$DEPS"
+      else
+        "$ROOT/server/scripts/build-deps.sh" duckdb
+      fi
       touch "$DEPS/duckdb-install/.ios-duckdb-$duckdb_key.stamp"
     fi
   )

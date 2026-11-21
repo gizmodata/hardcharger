@@ -1652,7 +1652,7 @@ jobs:
           path: |
             ios/build/iphonesimulator/deps/*-install
             ios/build/iphoneos/deps/*-install
-          key: ios-deps-${{ github.job }}-${{ steps.ios-toolchain.outputs.xcode }}-${{ hashFiles('server/scripts/build-deps.sh', 'server/scripts/deps-*.sh', 'server/scripts/build-extension-deps.sh', 'server/scripts/build-replxx.sh', 'server/scripts/patch-duckdb*.cmake', 'server/scripts/retire-ducklake-patch.cmake', 'server/scripts/duckdb-extensions-ios.cmake', 'third_party/chargewire/cpp/scripts/*.sh', 'ios/cmake/ios.toolchain.cmake') }}
+          key: ios-deps-${{ github.job }}-${{ steps.ios-toolchain.outputs.xcode }}-${{ hashFiles('server/scripts/build-deps.sh', 'server/scripts/deps-*.sh', 'server/scripts/build-extension-deps.sh', 'server/scripts/build-replxx.sh', 'server/scripts/duckdb-source.sh', 'server/scripts/install-engine-sdk.py', 'server/scripts/retire-ducklake-patch.cmake', 'server/scripts/duckdb-extensions-ios.cmake', 'third_party/chargewire/cpp/scripts/*.sh', 'ios/cmake/ios.toolchain.cmake') }}
       - name: Cross-build the server for the simulator, smoke-test it in one
         run: ios/scripts/build-server-ios.sh iphonesimulator
       - name: Unit and UI tests

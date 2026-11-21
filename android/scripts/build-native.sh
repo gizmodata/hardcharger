@@ -32,10 +32,14 @@ if [ ! -f "$HARDCHARGER_DEPS_DIR/arrow-install/.android-$arrow_key.stamp" ]; the
 fi
 duckdb_key=$(recipe_key "$ROOT/server/scripts/deps-duckdb.sh" "$ROOT/server/scripts/build-extension-deps.sh" \
   "$ROOT/server/scripts/duckdb-extensions-ios.cmake" "$ROOT/server/scripts/duckdb-extensions-android.cmake" \
-  "$ROOT"/server/scripts/patch-duckdb*.cmake "$ROOT/server/scripts/retire-ducklake-patch.cmake" \
+  "$ROOT/server/scripts/install-engine-sdk.py" "$ROOT/server/scripts/retire-ducklake-patch.cmake" \
   "$ROOT/server/scripts/duckdb-source.sh")
 if [ ! -f "$HARDCHARGER_DEPS_DIR/duckdb-install/.android-$duckdb_key.stamp" ]; then
-  "$ROOT/server/scripts/build-deps.sh" duckdb
+  if [ "${GITHUB_ACTIONS:-}" = true ]; then
+    python3 "$ROOT/server/scripts/install-engine-sdk.py" "android-$HARDCHARGER_ANDROID_ABI" "$HARDCHARGER_DEPS_DIR"
+  else
+    "$ROOT/server/scripts/build-deps.sh" duckdb
+  fi
   touch "$HARDCHARGER_DEPS_DIR/duckdb-install/.android-$duckdb_key.stamp"
 fi
 [ "${HARDCHARGER_ANDROID_DEPS_ONLY:-0}" != 1 ] || exit 0

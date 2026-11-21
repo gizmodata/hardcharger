@@ -10,8 +10,7 @@
 // could have it called in place of the one the stored expression meant: a policy made true, a
 // CHECK that passes, a body that runs with its owner's rights on the caller's behalf.
 //
-// Under access control no session decides. DuckDB (patched: server/scripts/
-// patch-duckdb-name-scope.cmake) gives the binder of each stored expression a SCOPE, one schema
+// Under access control no session decides. Hardcharger Engine gives the binder of each stored expression a SCOPE, one schema
 // fixed by the object the expression belongs to, and asks the hook below for every function and
 // type looked up under it. Child binders inherit the scope (subqueries, CTEs, table macros,
 // macros calling macros). The hook finds a name ONLY as follows, the same for every session,

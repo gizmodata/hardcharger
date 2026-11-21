@@ -1,12 +1,5 @@
 #!/usr/bin/env bash
-# Builds DuckDB 2.0 into server/.deps/duckdb-install from the pinned Hardcharger Engine source, after
-# patching it with every scripts/patch-duckdb*.cmake in name order (patch-duckdb.cmake: the
-# binder hook access control needs to check views with their owner's rights;
-# Arrow HUGEINT export; the progress estimate throttle); native builds keep DuckDB’s four
-# standard extensions, while iOS keeps its optional extensions built in
-# (duckdb-extensions-ios.cmake). OpenSSL comes from
-# $OPENSSL_ROOT_DIR, else server/.deps's own (the portable build's), else the system's.
-# `build-deps.sh duckdb` runs it.
+# Build the pinned Hardcharger Engine source for local development.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export CHARGEWIRE_DEPS_DIR="${HARDCHARGER_DEPS_DIR:-$HERE/.deps}"
@@ -15,7 +8,10 @@ if [ -z "${OPENSSL_ROOT_DIR:-}" ] && [ -d "$CHARGEWIRE_DEPS_DIR/openssl-install"
 fi
 
 source "$HERE/scripts/duckdb-source.sh"
-SRC="$CHARGEWIRE_DEPS_DIR/duckdb"
+# Earlier releases applied patches directly to the cached DuckDB checkout. Keep
+# that worktree and its CMake build directory intact when switching to the fork.
+SRC="$CHARGEWIRE_DEPS_DIR/hardcharger-engine/duckdb"
+BUILD="$CHARGEWIRE_DEPS_DIR/hardcharger-engine/duckdb-build"
 prepare_duckdb_source
 
 # Mobile apps build the optional extensions and their transitive libraries. Desktop builds
@@ -46,15 +42,15 @@ fi
 if [ -n "${HARDCHARGER_ANDROID_ABI:-}" ]; then
   platform=android_arm64
   [ "$HARDCHARGER_ANDROID_ABI" != x86_64 ] || platform=android_amd64
-  cmake -S "$SRC" -B "$CHARGEWIRE_DEPS_DIR/duckdb-build" -G Ninja \
+  cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$CHARGEWIRE_DEPS_DIR/duckdb-install" \
     -DOVERRIDE_GIT_DESCRIBE="$DUCKDB_VERSION_NAME" -DDUCKDB_EXPLICIT_PLATFORM="$platform" \
     -DBUILD_SHELL=OFF -DBUILD_UNITTESTS=OFF -DENABLE_SANITIZER=OFF -DENABLE_UBSAN=OFF \
     -DBUILD_EXTENSIONS="" -DDUCKDB_EXTENSION_CONFIGS="$EXTENSIONS"
   # Loadable module targets deliberately reference symbols in the host engine. They
   # are not app artifacts; build the two engine libraries and their static dependencies.
-  cmake --build "$CHARGEWIRE_DEPS_DIR/duckdb-build" --target duckdb duckdb_static duckdb_cpp_api duckdb_local_extension_repository
-  cmake --install "$CHARGEWIRE_DEPS_DIR/duckdb-build"
+  cmake --build "$BUILD" --target duckdb duckdb_static duckdb_cpp_api duckdb_local_extension_repository
+  cmake --install "$BUILD"
   cp "$SRC/src/include/duckdb_v2.h" "$CHARGEWIRE_DEPS_DIR/duckdb-install/include/"
 elif [ -z "${HARDCHARGER_IOS_SDK:-}" ]; then
   # HARDCHARGER_CPU_TARGET (scripts/cpu-target.sh): optimized keeps DuckDB's default profile
@@ -71,7 +67,7 @@ else
   # extensions above are built in. The platform is named (DuckDB would run a program it
   # builds to find out, which can't run here). Keep the extension ABI version in step with native builds.
   [ -n "${CMAKE_TOOLCHAIN_FILE:-}" ] || { echo "HARDCHARGER_IOS_SDK needs CMAKE_TOOLCHAIN_FILE" >&2; exit 2; }
-  cmake -S "$SRC" -B "$CHARGEWIRE_DEPS_DIR/duckdb-build" -G Ninja \
+  cmake -S "$SRC" -B "$BUILD" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$CHARGEWIRE_DEPS_DIR/duckdb-install" \
@@ -80,8 +76,8 @@ else
     -DENABLE_EXTENSION_LOAD=OFF \
     -DDUCKDB_EXPLICIT_PLATFORM="$([ "$HARDCHARGER_IOS_SDK" = iphoneos ] && echo ios_arm64 || echo ios_simulator_arm64)" \
     -DBUILD_EXTENSIONS="" -DDUCKDB_EXTENSION_CONFIGS="$EXTENSIONS"
-  cmake --build "$CHARGEWIRE_DEPS_DIR/duckdb-build"
-  cmake --install "$CHARGEWIRE_DEPS_DIR/duckdb-build"
+  cmake --build "$BUILD"
+  cmake --install "$BUILD"
   cp "$SRC/src/include/duckdb_v2.h" "$CHARGEWIRE_DEPS_DIR/duckdb-install/include/"
 fi
 # CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.
@@ -98,7 +94,6 @@ cp -R "$SRC/third_party/fmt/include/fmt" "$SRC/third_party/re2/re2" \
 # DuckDB's generated loader, which registers every built-in extension through its
 # describe function, the file that calls it before main(), and the one archive the
 # install leaves out.
-BUILD="$CHARGEWIRE_DEPS_DIR/duckdb-build"
 LOADER="$CHARGEWIRE_DEPS_DIR/duckdb-install/share/duckdb-static"
 mkdir -p "$LOADER"
 cp "$BUILD/src/duckdb_static_extension_loader.c" "$SRC/extension/loader/static_extension_autoregister.cpp" "$LOADER/"
@@ -117,11 +112,3 @@ fi
 # What the server's CMake reads to know which CPUs this DuckDB runs on (cpu-target.sh).
 mkdir -p "$CHARGEWIRE_DEPS_DIR/duckdb-install/share"
 "$HERE/scripts/cpu-target.sh" > "$CHARGEWIRE_DEPS_DIR/duckdb-install/share/hardcharger-cpu-target"
-grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_basetableref.cpp" \
-  || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
-grep -q hardcharger_scoped_lookup_hook "$SRC/src/catalog/catalog.cpp" \
-  || { echo "DuckDB lost the name scope patch" >&2; exit 1; }
-grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
-  || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
-grep -q next_update_ms "$SRC/src/common/progress_bar/progress_bar.cpp" \
-  || { echo "DuckDB lost the progress estimate throttle patch" >&2; exit 1; }

@@ -1,7 +1,8 @@
 # Source and extension ABI used by all Hardcharger builds.
 DUCKDB_REPOSITORY=https://github.com/gizmodata/hardcharger-engine.git
-DUCKDB_COMMIT=aef3086626218f878d821f7936e3c20cc4940b12
+DUCKDB_COMMIT=b7c8f0fd8a58428bbd4a7a33848b1c91c994d85e
 DUCKDB_VERSION_NAME=v2.0.1
+HARDCHARGER_ENGINE_TAG=v2.0.1
 
 prepare_duckdb_source() {
   if [ ! -e "$SRC/.git" ]; then
@@ -13,15 +14,11 @@ prepare_duckdb_source() {
   fi
   git -C "$SRC" checkout --quiet --detach "$DUCKDB_COMMIT"
   cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$HERE/scripts/retire-ducklake-patch.cmake"
-  local patch
-  for patch in "$HERE"/scripts/patch-duckdb*.cmake; do
-    cmake -DDUCKDB_SOURCE_DIR="$SRC" -P "$patch"
-  done
 }
 
 build_native_duckdb() {
   local extensions="$1" profile="$2" prefix="$CHARGEWIRE_DEPS_DIR/duckdb-install"
-  local build="$CHARGEWIRE_DEPS_DIR/duckdb-build"
+  local build="$CHARGEWIRE_DEPS_DIR/hardcharger-engine/duckdb-build"
   cmake -S "$SRC" -B "$build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" \
     -DOVERRIDE_GIT_DESCRIBE="$DUCKDB_VERSION_NAME" -DDUCKDB_OPTIMIZATION_PROFILE="$profile" \

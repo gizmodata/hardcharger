@@ -47,7 +47,7 @@ runs:
         key: ${{ steps.key.outputs.key }}
         lookup-only: ${{ inputs.lookup-only }}
     - name: Build ${{ inputs.dependency }}
-      if: steps.restore.outputs.cache-hit != 'true'
+      if: steps.restore.outputs.cache-hit != 'true' && inputs.dependency != 'duckdb'
       shell: bash
       env:
         DEPCACHE_DEP: ${{ inputs.dependency }}
@@ -55,6 +55,12 @@ runs:
       run: |
         read -r -a build <<< "$DEPCACHE_BUILD"
         "${build[@]}" "$DEPCACHE_DEP"
+    - name: Install released Hardcharger Engine SDK
+      if: steps.restore.outputs.cache-hit != 'true' && inputs.dependency == 'duckdb'
+      shell: bash
+      env:
+        SDK_PLATFORM: ${{ inputs.platform }}
+      run: python3 server/scripts/install-engine-sdk.py "$SDK_PLATFORM" server/.deps
     # Tags can restore their own caches on a retry. Save before the tests so a failed
     # gate does not throw away a dependency build; main still supplies other refs.
     - if: steps.restore.outputs.cache-hit != 'true'

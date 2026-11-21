@@ -195,8 +195,7 @@ preserves literals and quoted names and falls back to the original SQL when unsu
 The editor and interactive CLI show estimated DuckDB progress where available, and distinguish
 execution from receiving results. Unknown progress stays indeterminate. CLI quiet mode and
 redirected output do not contain progress bars. A statement gets an estimate once it has run for
-the session's `progress_bar_time` (2 seconds by default), recomputed at most every 100 ms; DuckDB
-is patched for this (`server/scripts/patch-duckdb-progress-throttle.cmake`), because computing it
+the session's `progress_bar_time` (2 seconds by default), recomputed at most every 100 ms; Hardcharger Engine throttles these estimates because computing it
 after every piece of work stalled plans with many parts.
 
 ## Query tags and visibility

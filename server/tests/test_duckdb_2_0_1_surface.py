@@ -5,7 +5,7 @@
   (allow_extension_repositories = 'hosts'), also spelled as a string; INSTALL x FROM <host>.
   Each is a LOAD statement: the admin guard, access control (MANAGE EXTENSIONS), readonly
   principals and read-only connections refuse every form, as they refused the prefix form.
-  Hardcharger keeps DuckDB 2.0.0's rule (scripts/patch-duckdb-extension-repositories.cmake): no
+  Hardcharger keeps DuckDB 2.0.0's rule (Hardcharger Engine repository policy): no
   repository is added, by host or by prefix, the administrator's included, until an administrator
   sets allow_extension_repositories to 'allowed' (or 'hosts_only'); 'forbidden' refuses it for good.
 - parquet_page_index(path): reads a Parquet file's page index (each page's min and max), like

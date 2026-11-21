@@ -1,8 +1,13 @@
-"""Old dependency installs must not reintroduce retired static extensions or patches."""
+"""Check the contents and replacement of cached engine dependencies."""
 
+import hashlib
 import os
 import pathlib
+import runpy
 import subprocess
+import tarfile
+
+import pytest
 
 from conftest import BASH
 
@@ -84,3 +89,38 @@ def test_retired_patch_cleanup_preserves_upstream_patches_and_is_idempotent(tmp_
         cmake("retire-ducklake-patch.cmake", DUCKDB_SOURCE_DIR=source)
         assert upstream.read_text() == "keep"
         assert not retired.exists() and not fetched.exists() and not stamp.exists()
+
+
+@pytest.mark.parametrize("mismatch", [None, "checksum", "commit", "platform"])
+def test_install_verified_engine_sdk_over_cached_install(tmp_path, mismatch):
+    source = tmp_path / "sdk"
+    include = source / "include"
+    metadata = source / "share/hardcharger-engine"
+    include.mkdir(parents=True)
+    metadata.mkdir(parents=True)
+    (include / "duckdb_v2.h").write_text("sdk header")
+    commit = "a" * 40
+    platform = "macos-arm64"
+    (metadata / "commit").write_text(commit)
+    (metadata / "platform").write_text(platform)
+    archive = tmp_path / f"hardcharger-engine-sdk-{platform}.tar.gz"
+    with tarfile.open(name=archive, mode="w:gz") as package:
+        package.add(name=source, arcname=".")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    destination = tmp_path / "duckdb-install"
+    destination.mkdir()
+    (destination / "old").write_text("cached install")
+    install = runpy.run_path(str(SCRIPTS / "install-engine-sdk.py"))["install"]
+
+    args = dict(archive=archive, checksums=f"{digest}  ./{archive.name}\n", commit=commit,
+                platform=platform, destination=destination, stage=tmp_path / "stage")
+    if mismatch:
+        key = "checksums" if mismatch == "checksum" else mismatch
+        args[key] = "mismatch"
+        with pytest.raises(ValueError):
+            install(**args)
+        assert (destination / "old").read_text() == "cached install"
+    else:
+        install(**args)
+        assert (destination / "include/duckdb_v2.h").read_text() == "sdk header"
+        assert not (destination / "old").exists()

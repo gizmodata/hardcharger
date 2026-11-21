@@ -3,8 +3,8 @@
 # each can be built (and cached) alone:
 #
 #   arrow   Arrow C++, IPC only            deps-arrow.sh (chargewire's build-arrow.sh)
-#   duckdb  DuckDB 2.0, patched, with its  deps-duckdb.sh (duckdb-source.sh,
-#           built-in extensions              patch-duckdb*.cmake, duckdb-extensions.cmake,
+#   duckdb  Hardcharger Engine with its    deps-duckdb.sh (duckdb-source.sh,
+#           built-in extensions              duckdb-extensions.cmake,
 #                                            build-extension-deps.sh)
 #   replxx  the client's line editor       build-replxx.sh
 #   openssl a static OpenSSL 3, for the    deps-openssl.sh

@@ -353,8 +353,7 @@ std::string ScopeLimits(const TokenScope& scope) {
 }
 
 // allow_extension_repositories decides whether a new extension repository, and with it a new
-// signing key whose extensions run in the server, may be added (scripts/
-// patch-duckdb-extension-repositories.cmake): the unrestricted administrator's decision only,
+// signing key whose extensions run in the server, may be added under the engine repository policy: the unrestricted administrator's decision only,
 // not MANAGE CONFIG's.
 std::string AdminOnlyRepositorySetting(const std::string& verb) {
   return verb + " allow_extension_repositories decides whether new extension repositories, whose signing keys "

@@ -106,7 +106,7 @@ jobs:
         id: deps
         with:
           path: android/build/${{ matrix.abi }}/deps/*-install
-          key: android-linux-ndk28.2-${{ matrix.abi }}-${{ hashFiles('android/cmake/**', 'android/scripts/build-native.sh', 'server/scripts/*.sh', 'server/scripts/*.cmake', 'third_party/chargewire/cpp/scripts/*.sh') }}
+          key: android-linux-ndk28.2-${{ matrix.abi }}-${{ hashFiles('android/cmake/**', 'android/scripts/build-native.sh', 'server/scripts/*.sh', 'server/scripts/install-engine-sdk.py', 'server/scripts/*.cmake', 'third_party/chargewire/cpp/scripts/*.sh') }}
       - name: Warm dependency caches on main
         if: inputs.warm_cache && steps.deps.outputs.cache-hit != 'true'
         env:

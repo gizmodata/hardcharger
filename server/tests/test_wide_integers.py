@@ -4,7 +4,7 @@ DuckDB sends both types as Arrow decimal128(38, 0) (unless the session sets
 arrow_lossless_conversion), which holds 38 digits. DuckDB itself copies the 16 bytes as
 they are, so before this a UHUGEINT of 2^127 or more arrived as a negative number
 (UHUGEINT's maximum as -1) and any value of 10^38 or more as a decimal128(38, 0) that isn't
-one. Now (server/scripts/patch-duckdb-arrow-hugeint.cmake) such a value fails the
+one. Now (Hardcharger Engine Arrow conversion) such a value fails the
 statement with a conversion error naming the value and the two ways around it: CAST to
 VARCHAR, or SET SESSION arrow_lossless_conversion = true (DuckDB's 16-byte Arrow types,
 which hold every value; a plain SET of it is global). Every value that fits is sent exactly as before.

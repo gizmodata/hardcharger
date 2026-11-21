@@ -33,7 +33,7 @@ def test_duckdb_progress_is_enabled_without_printing(launcher):
 
 def test_no_estimate_before_progress_bar_time_and_a_long_statement_gets_one(launcher):
     """DuckDB computes no estimate before a statement has run progress_bar_time, then at most every
-    100 ms (server/scripts/patch-duckdb-progress-throttle.cmake). Unpatched, it walks every pipeline
+    100 ms (Hardcharger Engine progress sampling). Unpatched, it walks every pipeline
     of the plan after every task under a lock the worker threads need, which stalled plans with
     many parts (2.9.0 to 2.13.1). A status read whose answer arrives before progress_bar_time has
     passed since the submit must show no estimate (whatever the load: the statement started after

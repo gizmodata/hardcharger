@@ -3,7 +3,7 @@
 The query has the shape of DB Olympics' q311: a 30-way UNION ALL of small aggregates (each
 part one or two pipelines of its own) joined to one more aggregate. 2.9.0 to 2.13.1 ran these
 150-1350 ms slower than 2.4.1 at times, because DuckDB recomputed the progress estimate after
-every task under a lock its worker threads need (server/scripts/patch-duckdb-progress-throttle.cmake).
+every task under a lock its worker threads need (Hardcharger Engine progress sampling).
 
 Each server gets its own database (built on first use, in HARDCHARGER_BENCH_WORK), the query
 runs 20 times to warm up and then RUNS times, and the script prints the median, p90, p99 and

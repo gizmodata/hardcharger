@@ -1193,8 +1193,7 @@ the executor's lock, which the worker threads need too; `progress_bar_time` only
 a bar, not this work. Server-side perf there: 12% of the CPU in `Pipeline::GetProgress`, 20% in
 mutex lock and unlock. With `SET enable_progress_bar = false`, 2.13.1 matched 2.4.1.
 
-2.14.0 patches DuckDB (`server/scripts/patch-duckdb-progress-throttle.cmake`) to compute the
-estimate only after `progress_bar_time` (2 s by default), then at most every 100 ms. Script:
+In Hardcharger v2.14.0 the engine computes the progress estimate only after `progress_bar_time` (2 s by default), then at most every 100 ms. Script:
 `bench/many_pipelines.py` (q311's shape on generated tables, 20 warm-up runs, then 100 timed,
 over the HTTP path or, with `--cli`, through the CLI as DB Olympics drives it; server CPU from
 `ps`). "before" is the release/v2.14.0 build without the patch, "after" the same build on the

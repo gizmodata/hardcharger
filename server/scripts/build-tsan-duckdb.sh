@@ -13,8 +13,8 @@ export CHARGEWIRE_DEPS_DIR="${HARDCHARGER_DEPS_DIR:-$HERE/.deps}"
 "$HERE/scripts/build-deps.sh" duckdb
 "$HERE/scripts/build-extension-deps.sh"
 export CMAKE_PREFIX_PATH="$CHARGEWIRE_DEPS_DIR/roaring-install:$CHARGEWIRE_DEPS_DIR/libpq-install:$CHARGEWIRE_DEPS_DIR/curl-install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-BUILD="$CHARGEWIRE_DEPS_DIR/duckdb-build"
-cmake -S "$CHARGEWIRE_DEPS_DIR/duckdb" -B "$BUILD" \
+BUILD="$CHARGEWIRE_DEPS_DIR/hardcharger-engine/duckdb-build"
+cmake -S "$CHARGEWIRE_DEPS_DIR/hardcharger-engine/duckdb" -B "$BUILD" \
   -DDUCKDB_EXTENSION_CONFIGS="$HERE/scripts/duckdb-extensions-tsan.cmake"
 cmake --build "$BUILD"
 cmake --install "$BUILD"
