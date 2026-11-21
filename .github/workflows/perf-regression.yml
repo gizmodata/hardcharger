@@ -151,7 +151,7 @@ jobs:
         run: |
           out="$RUNNER_TEMP/regress-out"
           cp bench/regress/thresholds.json "$out/thresholds.json"
-          tar -czf "$RUNNER_TEMP/performance-baseline.tar.gz" -C "$out" results.json verdict.json report.md thresholds.json
+          tar -czf "$RUNNER_TEMP/performance-baseline.tar.gz" -C "$out" results.json verdict.json report.md thresholds.json baselines
       - uses: actions/upload-artifact@v7
         if: inputs.release_gate
         with:

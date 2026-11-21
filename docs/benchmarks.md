@@ -1108,6 +1108,8 @@ Host classes are `aws-<instance type>`, `gha-<runner label>` or `<os>-<arch>-loc
   `verdict.json` and `report.md`. The raw data includes the runner, benchmark settings, binary hashes
   and individual repetitions. After extraction, replay the decision with the tagged checkout's
   `python bench/regress/compare.py results.json --thresholds thresholds.json --fail-on-regression`.
+  The archive also includes the released server's own measurements under
+  `baselines/<host class>/sf1-t<threads>/<version>.json` for use with `--with-baseline`.
   CI reruns the released binaries on the candidate's runner so hardware drift does not affect the gate.
 - **Locally**, for development: `--scale 0.01 --repetitions 2 --warm-passes 1 --mp-runs 5`
   finishes in a minute. A laptop under load measures the load.

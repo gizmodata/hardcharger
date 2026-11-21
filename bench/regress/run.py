@@ -481,6 +481,8 @@ def main() -> int:
     report, verdict = compare.build_report(runs=[results], thresholds=thresholds)
     if args.release_gate and set(verdict["baselines"]) != set(args.release):
         raise ValueError("missing a required prior release comparison")
+    if args.release_gate:
+        compare.save_baselines(results, out / "baselines", labels=[results["candidate"]])
     (out / "report.md").write_text(report)
     (out / "verdict.json").write_text(json.dumps(verdict, indent=1))
     log(f"wrote {out / 'report.md'}: {verdict['summary']}")
