@@ -31,6 +31,47 @@ def test_duckdb_progress_is_enabled_without_printing(launcher):
     assert all(0 <= f <= 1 for f in estimates)
 
 
+def test_no_estimate_before_progress_bar_time_and_a_long_statement_gets_one(launcher):
+    """DuckDB computes no estimate before a statement has run progress_bar_time, then at most every
+    100 ms (server/scripts/patch-duckdb-progress-throttle.cmake). Unpatched, it walks every pipeline
+    of the plan after every task under a lock the worker threads need, which stalled plans with
+    many parts (2.9.0 to 2.13.1). A status read whose answer arrives before progress_bar_time has
+    passed since the submit must show no estimate (whatever the load: the statement started after
+    the submit), and a long statement must get one after it."""
+    running = launcher.start()
+    session = running.admin()
+    assert session.scalar(sql="SELECT current_setting('progress_bar_time')") == 2000
+    delay = 4.0  # seconds; longer than the default for room on a loaded host's first status reads
+    session.execute(sql=f"SET threads=1; SET progress_bar_time={int(delay * 1000)}")
+    began = time.monotonic()
+    response = session.submit(sql="SELECT sum(hash(i)) FROM range(1000000000000) t(i)",
+                              headers={"Prefer": "respond-async"})
+    assert response.status_code in (200, 201), response.text
+    statement_id = response.json()["statement_id"]
+    early, late = [], []
+    deadline = began + delay + 45 * PERF_SCALE
+    try:
+        while not late:
+            doc = session.status(statement_id=statement_id)
+            answered = time.monotonic() - began
+            assert doc["state"] == "running", doc
+            fraction = doc.get("progress", {}).get("fraction")
+            if answered < delay:
+                early.append(fraction)
+            elif fraction is not None:
+                late.append(fraction)
+            assert time.monotonic() < deadline, (early, doc)
+            time.sleep(0.05)
+    finally:
+        cancel = session.http.post(url=f"{session.url}/statements/{statement_id}/cancel", headers=session.headers())
+        assert cancel.status_code == 202, cancel.text
+        assert session.wait_done(statement_id=statement_id, timeout=30 * TIMEOUT_SCALE)["state"] == "cancelled"
+    assert early, "no status read was answered within progress_bar_time of the submit"
+    # Between the statement's start and its first task DuckDB reports 0; never a computed estimate.
+    assert all(f is None or f == 0 for f in early), early
+    assert 0 < late[0] <= 1, late
+
+
 def test_cli_progress_is_transient_and_never_written_to_pipes(launcher):
     import errno
     import os

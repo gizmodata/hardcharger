@@ -1164,3 +1164,44 @@ Cost: 0.80 instance-hours of an on-demand c8a.8xlarge ($1.7243/h list price) plu
 gp3 volume: about $1.42 for both builds and both runs. Afterwards `aws.sh check` found nothing
 tagged `Purpose=hardcharger-perf-regress` (instance terminated; security group and key pair
 deleted).
+
+## Plans with many pipelines: the progress estimate's cost (2026-11-18, 2.14.0)
+
+DB Olympics on AWS (c8a.8xlarge, Linux x86, server pinned to 8 cores, `threads = 8`) found
+2.9.0 to 2.13.1 up to ten times slower than 2.4.1 on queries whose plans have many parts:
+q311, a 30-way `UNION ALL` of small aggregates, took a median of 77-112 ms against 11.5 ms, with
+p90 514 ms, stalls up to 1.35 s and many times the server CPU (q167, q313, q396 and q241 alike).
+2.9.0 turned on DuckDB's progress estimate (`enable_progress_bar`) for every session, and DuckDB
+recomputes it after every task the statement's own thread runs, walking every pipeline under
+the executor's lock, which the worker threads need too; `progress_bar_time` only delays printing
+a bar, not this work. Server-side perf there: 12% of the CPU in `Pipeline::GetProgress`, 20% in
+mutex lock and unlock. With `SET enable_progress_bar = false`, 2.13.1 matched 2.4.1.
+
+2.14.0 patches DuckDB (`server/scripts/patch-duckdb-progress-throttle.cmake`) to compute the
+estimate only after `progress_bar_time` (2 s by default), then at most every 100 ms. Script:
+`bench/many_pipelines.py` (q311's shape on generated tables, 20 warm-up runs, then 100 timed,
+over the HTTP path or, with `--cli`, through the CLI as DB Olympics drives it; server CPU from
+`ps`). "before" is the release/v2.14.0 build without the patch, "after" the same build on the
+patched DuckDB; 2.4.1 and 2.13.1 are the released macOS builds. Apple M5 Max, macOS, a shared
+machine (load average 10-25), `threads = 8`:
+
+| Server | median (ms) | p90 | max | server CPU per run (ms) |
+|---|---:|---:|---:|---:|
+| before (estimate on, unpatched) | 11.8 | 18.1 | 31.1 | 28.5 |
+| before, `SET enable_progress_bar = false` | 11.4 | 12.1 | 12.7 | 25.3 |
+| **after (estimate on, patched)** | **11.1** | **11.7** | **13.9** | **24.4** |
+| 2.4.1 (reference) | 11.5 | 12.1 | 13.0 | 25.2 |
+| 2.13.1 | 11.8 | 15.4 | 23.0 | 27.3 |
+
+Through the CLI: before 12.2 / 16.6 / 24.3 ms (median / p90 / max), after 11.3 / 12.0 / 12.4,
+2.4.1 11.5 / 12.5 / 13.6. DB Olympics' own q311 on its SF1 data (loaded as DB Olympics loads
+Hardcharger): before 10.5 / 12.2 / 20.3 ms and 19.6 ms CPU per run, after 9.5 / 10.0 / 10.3 and
+17.1. A macOS `sample` profile of 8 s of q311 in a loop: unpatched, 336 samples inside
+`ProgressBar::Update` (9% of the on-CPU samples) and 2,346 waiting for a mutex; unpatched with
+`SET progress_bar_time = 600000`, 387 and 2,751 (the delay defers nothing); patched, 2 and 1,549.
+
+The patched build matches 2.4.1 within the noise. The local machine shows the cost only in the
+tail and the CPU time: the stalls of hundreds of milliseconds were seen on Linux x86 with the
+server pinned to as many cores as it has threads; a Linux arm64 container here (2.13.1 image,
+8 cores) shows q311 at 11.2 / 13.8 / 133 ms and 21.7 ms CPU with the estimate on against
+10.2 / 11.2 / 11.9 and 15.2 with it off. Rerun on the AWS machine to see the full effect.

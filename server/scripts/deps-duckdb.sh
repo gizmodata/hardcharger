@@ -2,8 +2,9 @@
 # Builds DuckDB 2.0 into server/.deps/duckdb-install with chargewire's build-duckdb.sh, after
 # patching it with every scripts/patch-duckdb*.cmake in name order (patch-duckdb.cmake: the
 # binder hook access control needs to check views with their owner's rights;
-# Arrow HUGEINT export); native builds keep DuckDB’s four standard extensions, while
-# iOS keeps its optional extensions built in (duckdb-extensions-ios.cmake). OpenSSL comes from
+# Arrow HUGEINT export; the progress estimate throttle); native builds keep DuckDB’s four
+# standard extensions, while iOS keeps its optional extensions built in
+# (duckdb-extensions-ios.cmake). OpenSSL comes from
 # $OPENSSL_ROOT_DIR, else server/.deps's own (the portable build's), else the system's.
 # `build-deps.sh duckdb` runs it.
 set -euo pipefail
@@ -143,3 +144,5 @@ grep -q hardcharger_bound_view_hook "$SRC/src/planner/binder/tableref/bind_baset
   || { echo "DuckDB lost the view hook patch" >&2; exit 1; }
 grep -q HardchargerDecimal38Converter "$SRC/src/common/arrow/arrow_appender.cpp" \
   || { echo "DuckDB lost the HUGEINT / UHUGEINT Arrow export patch" >&2; exit 1; }
+grep -q next_update_ms "$SRC/src/common/progress_bar/progress_bar.cpp" \
+  || { echo "DuckDB lost the progress estimate throttle patch" >&2; exit 1; }
