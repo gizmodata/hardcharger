@@ -4,7 +4,7 @@
     "duckdb_commit": {
       "file": "server/scripts/duckdb-source.sh",
       "pattern": "^DUCKDB_COMMIT=([0-9a-f]{40})$",
-      "value": "aef3086626218f878d821f7936e3c20cc4940b12"
+      "value": "b7c8f0fd8a58428bbd4a7a33848b1c91c994d85e"
     },
     "duckdb_version": {
       "file": "server/scripts/duckdb-source.sh",

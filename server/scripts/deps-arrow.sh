@@ -25,6 +25,10 @@ fi
 CPU_TARGET=$("$HERE/scripts/cpu-target.sh")
 SIMD_LEVEL=DEFAULT
 [ "$CPU_TARGET" != baseline ] || SIMD_LEVEL=NONE
+# Clang 18 crashes when instrumenting Arrow's runtime SVE bit-packing kernels.
+if [[ "$(uname -m)" == aarch64 && "${CXXFLAGS:-}" == *-fsanitize=thread* ]]; then
+  export CMAKE_TOOLCHAIN_FILE="$HERE/scripts/arrow-arm64-tsan.cmake"
+fi
 CHARGEWIRE_ARROW_SIMD_LEVEL="$SIMD_LEVEL" CHARGEWIRE_DEPS_DIR="$DEPS" \
   "$HERE/../third_party/chargewire/cpp/scripts/build-arrow.sh"
 # CMake installs libraries into lib64 on RPM-based systems; the server's CMake uses lib.

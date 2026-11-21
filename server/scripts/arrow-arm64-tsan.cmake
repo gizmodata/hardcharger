@@ -1,0 +1,1 @@
+set(ARROW_RUNTIME_SIMD_LEVEL NONE CACHE STRING "Runtime SIMD level for the TSan build" FORCE)
