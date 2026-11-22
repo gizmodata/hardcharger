@@ -2118,8 +2118,8 @@ opens any store, with a warning when the store belongs to a cluster.
 
 ### RBAC and instrumentation store formats
 
-Hardcharger 2.14 writes format `1.1` separately to each enabled store. In RBAC, the
-`schema_version` key lives in `hardcharger_rbac.meta`. In instrumentation, it lives
+Hardcharger 2.14 records a format separately in each enabled store: `2.0` for RBAC and
+`1.1` for instrumentation. In RBAC, the `schema_version` key lives in `hardcharger_rbac.meta`. In instrumentation, it lives
 in `store_metadata` in the configured instrumentation schema. For the default DuckDB
 instrumentation file an administrator can read it with:
 
@@ -2131,7 +2131,12 @@ A missing or NULL version in an existing store means format 1.0. Released RBAC s
 spell it `1`. Writable startup migrates the store in place and records its new version
 after the migration succeeds. The read-only credential verifier leaves the RBAC
 store unchanged. Hardcharger 2.14 refuses an unsupported format and reports which
-store needs attention. The RBAC `data_version` continues to track changes to grants
+store needs attention.
+
+Hardcharger 2.13 and earlier refuse an RBAC store that 2.14 has upgraded (`the access control
+store's schema is version 2, newer than this server's (1)`). They would otherwise run on it
+without 2.14's sign-in protections and fail to create users. Back up the RBAC store before
+upgrading if you may need to return to 2.13: a rollback means restoring that backup. The RBAC `data_version` continues to track changes to grants
 and accounts independently of the schema version.
 
 ### Users from the identity provider

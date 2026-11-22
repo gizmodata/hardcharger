@@ -16,7 +16,9 @@ own changelog in `python/CHANGELOG.md`.
   the engine’s platform SDKs. Local source builds use the same pinned commit.
   [Engine changes and benchmark results](https://github.com/gizmodata/hardcharger-engine/blob/v2.0.1/docs/optimizations.md)
 - RBAC and instrumentation now record their own store format versions. Version 2.14 upgrades
-  existing version 1 stores in place to format 1.1.
+  existing version 1 stores in place: the RBAC store to format 2.0, the instrumentation store to
+  format 1.1. **Hardcharger 2.13 and earlier refuse an RBAC store that 2.14 has upgraded**, so back
+  up the RBAC store before upgrading if you may need to roll back.
 - Administrators can link SSO identities to RBAC users and list accounts with both SSO and
   password sign-in in `hardcharger_users()`. After upgrade, the first verified SSO sign-in
   matching an unlinked account records its issuer and subject and preserves the local password.

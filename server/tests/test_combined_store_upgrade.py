@@ -15,6 +15,8 @@ from test_rbac_token_provisioning import ISSUER, exchange, idp, idp_env
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "combined_upgrade"
 PASSWORD = "reader-upgrade-fixture"
 VERSION = "SELECT value FROM {} WHERE key = 'schema_version'"
+# Each store's own format: 2.0 for RBAC (so 2.13 and earlier refuse an upgraded store), 1.1 for instrumentation.
+FORMATS = {"hardcharger_rbac.meta": "2.0", "instr.store_metadata": "1.1"}
 
 
 def restore(files, kind, tmp_path, request):
@@ -113,7 +115,7 @@ def test_upgrade_with_rbac_and_instrumentation(launcher, request, tmp_path, vers
         reader.close()
         admin.close()
         server.running.stop()
-        assert inspect_rbac(launcher, uri, [user_id, VERSION.format("meta")]) == [original_id, [{"value": "1.1"}]]
+        assert inspect_rbac(launcher, uri, [user_id, VERSION.format("meta")]) == [original_id, [{"value": "2.0"}]]
 
 
 @pytest.mark.parametrize("kind", ["duckdb", "postgres"])
@@ -148,6 +150,8 @@ def test_preview_password_metadata_survives_upgrade(launcher, request, tmp_path,
 
 
 @pytest.mark.parametrize("table,label,bad", [("hardcharger_rbac.meta", "access control", "1.10"),
+                                             ("hardcharger_rbac.meta", "access control", "2.1"),
+                                             ("hardcharger_rbac.meta", "access control", "3"),
                                              ("instr.store_metadata", "instrumentation", "1.10"),
                                              ("instr.store_metadata", "instrumentation", "1.1x")])
 def test_independent_store_format_checks(launcher, request, tmp_path, table, label, bad):
@@ -168,8 +172,8 @@ def test_independent_store_format_checks(launcher, request, tmp_path, table, lab
             connection.execute(query=f"UPDATE {table} SET value = NULL WHERE key = 'schema_version'")
     start_rbac_server(launcher=launcher, store_uri=uri, args=args)
     with psycopg.connect(conninfo=uri) as connection:
-        for migrated in ("hardcharger_rbac.meta", "instr.store_metadata"):
-            assert connection.execute(query=VERSION.format(migrated)).fetchone() == ("1.1",)
+        for migrated, current in FORMATS.items():
+            assert connection.execute(query=VERSION.format(migrated)).fetchone() == (current,)
 
 
 @pytest.mark.parametrize("component", ["rbac", "instrumentation"])
@@ -194,5 +198,5 @@ def test_failed_migration_keeps_format_retryable(launcher, request, tmp_path, co
             conn.execute(query="ALTER VIEW instr.saved_execution_details RENAME TO execution_details")
     start_rbac_server(launcher=launcher, store_uri=uri, args=args)
     with psycopg.connect(conninfo=uri) as conn:
-        for table in ("hardcharger_rbac.meta", "instr.store_metadata"):
-            assert conn.execute(query=VERSION.format(table)).fetchone() == ("1.1",)
+        for table, current in FORMATS.items():
+            assert conn.execute(query=VERSION.format(table)).fetchone() == (current,)

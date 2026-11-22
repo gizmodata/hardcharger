@@ -47,13 +47,16 @@ def test_a_store_schema_newer_than_the_server_is_refused(launcher, pg_store):
     server = start_rbac_server(launcher=launcher, store_uri=uri)
     server.running.stop()
     with psycopg.connect(conninfo=uri, autocommit=True) as connection:
-        connection.execute(query="UPDATE hardcharger_rbac.meta SET value = '2' WHERE key = 'schema_version'")
+        connection.execute(query="UPDATE hardcharger_rbac.meta SET value = '3' WHERE key = 'schema_version'")
     newer = launcher.start(env=rbac_env(store_uri=uri), expect_up=False)
     assert newer.process.wait(timeout=60) == 1
-    assert "the access control store's schema is version 2, newer than this server's (1.1)" in newer.log(), newer.log()
+    assert "the access control store's schema is version 3, newer than this server's (2.0)" in newer.log(), newer.log()
     with psycopg.connect(conninfo=uri, autocommit=True) as connection:
         connection.execute(query="UPDATE hardcharger_rbac.meta SET value = '1' WHERE key = 'schema_version'")
-    start_rbac_server(launcher=launcher, store_uri=uri)  # the twin: the known version opens
+    start_rbac_server(launcher=launcher, store_uri=uri)  # the twin: a released ("1") store opens and is migrated
+    with psycopg.connect(conninfo=uri, autocommit=True) as connection:
+        assert connection.execute(query="SELECT value FROM hardcharger_rbac.meta "
+                                        "WHERE key = 'schema_version'").fetchone() == ("2.0",)
 
 
 def test_init_sql_attach_errors_are_redacted(launcher):

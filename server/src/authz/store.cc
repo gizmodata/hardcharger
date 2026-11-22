@@ -43,7 +43,12 @@ namespace {
 
 namespace compat = hardcharger::authz::ddb;
 
-constexpr StoreFormat kRbacFormat{1, 1};
+// Format 2.0 is 2.14's. Its major is 2 so that Hardcharger 2.13 and earlier refuse a store 2.14
+// upgraded (they accept a whole-number version up to 1, and read "1.1" as 1): those servers
+// would run on it without 2.14's sign-in protections and could not create users. Released
+// stores ("1", or no version: 1.0) and the 2.14 preview format 1.1 are migrated in place
+// (ReadSchemaVersion).
+constexpr StoreFormat kRbacFormat{2, 0};
 constexpr const char* kSchema = "rbac_store.hardcharger_rbac";
 
 std::string T(const char* table) { return std::string(kSchema) + "." + table; }
@@ -685,7 +690,7 @@ arrow::Result<std::string> RbacStore::ReadSchemaVersion() {
         rows.ok() ? std::string() : " (" + rows.status().message() + ")");
   }
   const auto version = GetString(**rows, 0, 0);
-  const auto error = kRbacFormat.Check("the access control store's schema", version);
+  const auto error = kRbacFormat.Check("the access control store's schema", version, {{1, 0}, {1, 1}});
   if (!error.empty()) return arrow::Status::Invalid("Hardcharger access control: ", error);
   return version;
 }

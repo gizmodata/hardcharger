@@ -3,6 +3,7 @@
 #include <charconv>
 #include <compare>
 #include <format>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 
@@ -16,7 +17,11 @@ struct StoreFormat {
   auto operator<=>(const StoreFormat&) const = default;
   std::string Text() const { return std::format("{}.{}", major, minor); }
 
-  std::string Check(std::string_view store, std::string_view text) const {
+  // Accepts a store of this server's major version with any minor up to its own, and any
+  // format listed in `migrated` (older formats the server upgrades in place). Refuses a
+  // newer format, an unknown older one, and text that is not a version.
+  std::string Check(std::string_view store, std::string_view text,
+                    std::initializer_list<StoreFormat> migrated = {}) const {
     const auto dot = text.find('.');
     auto component = [](std::string_view digits, unsigned& number) {
       if (digits.empty()) return false;
@@ -32,8 +37,11 @@ struct StoreFormat {
     if (found > *this) {
       return std::format("{} is version {}, newer than this server's ({})", store, text, Text());
     }
-    if (found.major != major) return std::format("{} has unsupported schema version '{}'", store, text);
-    return {};
+    if (found.major == major) return {};
+    for (const auto& format : migrated) {
+      if (found == format) return {};
+    }
+    return std::format("{} has unsupported schema version '{}'", store, text);
   }
 };
 

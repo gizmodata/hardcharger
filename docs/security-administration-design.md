@@ -63,7 +63,7 @@ stores that already have that role.
 ## How it works
 
 **In the store.** One table, `system_admins (principal_kind, principal_id, granted_by)`,
-created when a 2.14 server migrates the RBAC store to format 1.1. Records are by id, so a dropped and recreated name holds nothing.
+created when a 2.14 server migrates the RBAC store to format 2.0. Records are by id, so a dropped and recreated name holds nothing.
 `granted_by` is the id of the System Admin who granted it, for `SHOW GRANTS`; the grant
 stands without them.
 

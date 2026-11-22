@@ -135,7 +135,7 @@ def test_a_2_13_0_store_is_upgraded_in_place(launcher, request, tmp_path, kind):
         # In place: the table is new, the store now records the migrated format.
         assert in_store(uri=uri, query="SELECT principal_kind, granted_by <> '' FROM hardcharger_rbac.system_admins "
                                        "ORDER BY principal_kind") == [("role", True), ("user", False)]
-        assert in_store(uri=uri, query="SELECT value FROM hardcharger_rbac.meta WHERE key = 'schema_version'") == [("1.1",)]
+        assert in_store(uri=uri, query="SELECT value FROM hardcharger_rbac.meta WHERE key = 'schema_version'") == [("2.0",)]
     # And it is the store's: there after a restart.
     server.running.stop()
     restarted = start_rbac_server(launcher=launcher, store_uri=uri)
