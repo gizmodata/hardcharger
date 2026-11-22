@@ -16,10 +16,13 @@
 #include <duckdb/main/extension_manager.hpp>
 #include <duckdb/parser/parser.hpp>
 #include <duckdb/parser/parsed_data/create_pragma_function_info.hpp>
+#include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
+#include <duckdb/parser/parsed_data/create_table_function_info.hpp>
 #include <duckdb/parser/parser_extension.hpp>
 #include <duckdb/parser/statement/copy_statement.hpp>
 #include <duckdb/parser/peg/keyword_helper/duckdb_keyword_helper.hpp>
 #include <duckdb/parser/peg/tokenizer/tokenizer.hpp>
+#include <duckdb/planner/operator/logical_load.hpp>
 #include <duckdb/planner/operator/logical_reset.hpp>
 #include <duckdb/planner/operator/logical_set.hpp>
 #include <duckdb/planner/extension_callback.hpp>
@@ -326,20 +329,36 @@ void Refuse(const dd::Identifier& name, const ParseGuard::State& state, const dd
   }
 }
 
-// After binding, before anything runs: SET and RESET anywhere in the plan (EXPLAIN ANALYZE
-// runs what it explains).
-void GuardSettings(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
+[[noreturn]] void RefuseDisabledAutoComplete() {
+  throw dd::PermissionException(
+      "the autocomplete extension is turned off on this server: its functions perform work that a statement timeout "
+      "or cancel cannot interrupt. The server's enable_sql_auto_complete option turns it on, for administrators.");
+}
+
+bool LoadsAutoComplete(const dd::LoadInfo& load) {
+  return (load.load_type == dd::LoadType::LOAD || load.load_type == dd::LoadType::LOAD_AS || load.load_after_install) &&
+         dd::ExtensionHelper::GetExtensionName(load.filename) == kAutoCompleteExtension;
+}
+
+// Check SET, RESET and LOAD anywhere in the plan before execution, including init SQL's
+// LOAD of a statically linked extension, which would bypass the extension-load callback.
+void GuardSettingsAndLoads(dd::PlannerExtensionInput& input, dd::BoundStatement& statement) {
   if (!input.info || !statement.plan) return;
   const auto& state = static_cast<const ParseGuard::State&>(*input.info);
-  if (!state.locked.load()) return;
+  const bool locked = state.locked.load();
+  if (!locked && state.autocomplete.enabled) return;
   std::vector<dd::LogicalOperator*> pending{statement.plan.get()};
   while (!pending.empty()) {
     dd::LogicalOperator* op = pending.back();
     pending.pop_back();
-    if (op->type == dd::LogicalOperatorType::LOGICAL_SET) {
+    if (!state.autocomplete.enabled && op->type == dd::LogicalOperatorType::LOGICAL_LOAD &&
+        LoadsAutoComplete(*op->Cast<dd::LogicalLoad>().info)) {
+      RefuseDisabledAutoComplete();
+    }
+    if (locked && op->type == dd::LogicalOperatorType::LOGICAL_SET) {
       auto& set = op->Cast<dd::LogicalSet>();
       if (set.scope != dd::SetScope::VARIABLE) Refuse(set.name, state, &set.value, set.scope);
-    } else if (op->type == dd::LogicalOperatorType::LOGICAL_RESET) {
+    } else if (locked && op->type == dd::LogicalOperatorType::LOGICAL_RESET) {
       auto& reset = op->Cast<dd::LogicalReset>();
       if (reset.scope != dd::SetScope::VARIABLE) Refuse(reset.name, state, nullptr, reset.scope);
     }
@@ -393,12 +412,7 @@ std::atomic<const ParseGuard::State*> autocomplete_state = nullptr;
 void CheckAutoComplete(const char* function, const char* growth) {
   const ParseGuard::State* state = autocomplete_state.load();
   if (state == nullptr) return;  // (a guard that never locked: startup, the operator's init SQL)
-  if (!state->autocomplete.enabled) {
-    throw dd::PermissionException(
-        "%s() is turned off on this server: %s, and neither a statement timeout nor a cancel interrupts it. The "
-        "server's enable_sql_auto_complete option turns it on, for administrators.",
-        function, growth);
-  }
+  if (!state->autocomplete.enabled) RefuseDisabledAutoComplete();
   if (!state->autocomplete.is_administrator || !state->autocomplete.is_administrator()) {
     throw dd::PermissionException(
         "%s() is for administrators on this server: %s, and neither a statement timeout nor a cancel interrupts it",
@@ -488,6 +502,43 @@ void WrapAutoComplete(dd::ClientContext& context) {
   });
 }
 
+// Install refusing definitions before init SQL. Native builds otherwise try to install
+// a missing function's extension and report an autoload failure instead of the policy.
+void RegisterDisabledAutoComplete(dd::DatabaseInstance& database) {
+  auto& catalog = dd::Catalog::GetSystemCatalog(database);
+  auto transaction = dd::CatalogTransaction::GetSystemTransaction(database);
+  for (const char* name : {"sql_auto_complete", "sql_tokenize", "check_peg_parser"}) {
+    dd::TableFunction function(
+        name, dd::FunctionSignature().AddPositionalOnly("sql", dd::LogicalType::VARCHAR), nullptr,
+        [](dd::ClientContext&, dd::TableFunctionBindInput&, dd::vector<dd::LogicalType>&,
+           dd::vector<dd::Identifier>&) -> dd::unique_ptr<dd::FunctionData> { RefuseDisabledAutoComplete(); });
+    if (std::string_view(name) == "sql_auto_complete") {
+      function.GetSignature().WithTypedKwargs("options", [](dd::TypedKwargs& options) {
+        options.Add("max_suggestion_count", dd::LogicalType::UBIGINT)
+            .Add("max_file_suggestion_count", dd::LogicalType::UBIGINT)
+            .Add("max_exact_suggestion_count", dd::LogicalType::UBIGINT);
+      });
+    }
+    dd::CreateTableFunctionInfo info(std::move(function));
+    info.internal = true;
+    info.on_conflict = dd::OnCreateConflict::REPLACE_ON_CONFLICT;
+    catalog.CreateTableFunction(transaction, info);
+  }
+
+  dd::ScalarFunctionSet format("duckdb_format_sql");
+  dd::ScalarFunction function(
+      {}, dd::LogicalType::VARCHAR, [](dd::DataChunk&, dd::ExpressionState&, dd::Vector&) { RefuseDisabledAutoComplete(); },
+      [](dd::BindScalarFunctionInput&) -> dd::unique_ptr<dd::FunctionData> { RefuseDisabledAutoComplete(); });
+  function.GetSignature().AddParameter("sql", dd::LogicalType::VARCHAR);
+  format.AddFunction(function);
+  function.GetSignature().AddParameter("config", dd::LogicalType::MAP(dd::LogicalType::VARCHAR, dd::LogicalType::VARCHAR));
+  format.AddFunction(function);
+  dd::CreateScalarFunctionInfo info(std::move(format));
+  info.internal = true;
+  info.on_conflict = dd::OnCreateConflict::REPLACE_ON_CONFLICT;
+  catalog.CreateFunction(transaction, info);
+}
+
 // Loading the extension: during startup only, and only when the option is on (a statically
 // linked one is loaded before any of this and wrapped at Lock()).
 class AutoCompleteLoads final : public dd::ExtensionCallback {
@@ -495,12 +546,7 @@ class AutoCompleteLoads final : public dd::ExtensionCallback {
   explicit AutoCompleteLoads(const ParseGuard::State& state) : state_(state) {}
   void OnBeginExtensionLoad(dd::DatabaseInstance&, const dd::string& name) override {
     if (!dd::StringUtil::CIEquals(name, kAutoCompleteExtension)) return;
-    if (!state_.autocomplete.enabled) {
-      throw dd::PermissionException(
-          "the autocomplete extension is turned off on this server: its functions run DuckDB's SQL matcher, whose time "
-          "grows exponentially with the brackets their input leaves open, uninterrupted. The server's "
-          "enable_sql_auto_complete option turns it on (for administrators), loaded at startup.");
-    }
+    if (!state_.autocomplete.enabled) RefuseDisabledAutoComplete();
     if (state_.locked.load()) {
       throw dd::PermissionException(
           "the autocomplete extension is loaded at startup only on this server (enable_sql_auto_complete), so that "
@@ -524,11 +570,12 @@ std::shared_ptr<ParseGuard> ParseGuard::Install(duckdb_v2_instance_handle instan
   parser.parser_info = dd::shared_ptr<dd::ParserExtensionInfo>(state, static_cast<dd::ParserExtensionInfo*>(state.get()));
   dd::ParserExtension::Register(config, std::move(parser));
   dd::PlannerExtension planner;
-  planner.post_bind_function = GuardSettings;
+  planner.post_bind_function = GuardSettingsAndLoads;
   planner.planner_info =
       dd::shared_ptr<dd::PlannerExtensionInfo>(state, static_cast<dd::PlannerExtensionInfo*>(state.get()));
   dd::PlannerExtension::Register(config, std::move(planner));
   dd::ExtensionCallback::Register(config, dd::make_shared_ptr<AutoCompleteLoads>(*state));
+  if (!state->autocomplete.enabled) RegisterDisabledAutoComplete(database);
   {
     // The one parse of SQL text that is not a connection's: IMPORT DATABASE's of load.sql.
     dd::CreatePragmaFunctionInfo info(dd::PragmaFunction::PragmaCall(
@@ -556,7 +603,7 @@ void ParseGuard::Lock(duckdb_v2_connection_handle connection) {
     dd::ExtensionHelper::TryAutoLoadExtension(context, kAutoCompleteExtension);
   }
   autocomplete_loaded_ = extensions.ExtensionIsLoaded(kAutoCompleteExtension);
-  if (autocomplete_loaded_) WrapAutoComplete(context);
+  if (state_->autocomplete.enabled && autocomplete_loaded_) WrapAutoComplete(context);
   state_->locked.store(true);
 }
 

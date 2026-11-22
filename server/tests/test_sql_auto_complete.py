@@ -94,8 +94,9 @@ def test_the_extension_cannot_be_loaded_when_off(server):
     assert rows == [{"value": "false"}], rows
 
 
-def test_an_init_sql_cannot_load_it_when_off(launcher):
-    failed = launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": "LOAD autocomplete"}, expect_up=False)
+@pytest.mark.parametrize("sql", ["LOAD autocomplete", *CALLS.values()])
+def test_init_sql_cannot_use_autocomplete_when_off(launcher, sql):
+    failed = launcher.start(env={"HARDCHARGER_INIT_SQL_COMMANDS": sql}, expect_up=False)
     assert failed.process.wait(timeout=60 * TIMEOUT_SCALE) == 1
     assert OFF in failed.log(), failed.log()[-800:]
 

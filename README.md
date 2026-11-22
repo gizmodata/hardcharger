@@ -1225,9 +1225,9 @@ when it returns. No limit on the argument keeps every shape fast, so these funct
 unless `enable_sql_auto_complete` is on** (`--enable-sql-auto-complete`,
 `HARDCHARGER_ENABLE_SQL_AUTO_COMPLETE`), and then **for administrators only**:
 
-- Off (the default), the extension is not loaded (`LOAD autocomplete`, in a session or the init
-  SQL, is refused), and a build that links it in (iOS, Android, the sanitizer builds) refuses its
-  functions: `sql_auto_complete() is turned off on this server: …`.
+- Off (the default), the server refuses `LOAD autocomplete` and calls to its functions in sessions
+  and init SQL, including on builds that link it in (iOS, Android, and sanitizer builds).
+  Calls fail with `403 permission_denied` without automatically installing the extension.
 - On, the server loads the extension at startup (installing it if
   `autoinstall_known_extensions` allows), and no later load is allowed. The functions answer
   administrators; to anyone else, wherever the call is (a statement, a view, `query()`), they

@@ -219,6 +219,7 @@ own changelog in `python/CHANGELOG.md`.
 - Seed the shared cache with signed autocomplete before testing startup and access controls.
 - Register access-control binder hooks before database workers start.
 - Verify Hardcharger’s expression depth cap and disabled autocomplete in Chargewire conformance tests.
+- Refuse disabled autocomplete before execution or automatic installation on every build.
 - Keep login-delay and statement instrumentation regression checks reliable on slower runners.
 - SQL log redaction no longer crashes on one-token statements such as `BEGIN`, `COMMIT`, or `ROLLBACK`.
 - Read-only connections enforce sequence and table-function restrictions when DuckDB binds views and macros.
