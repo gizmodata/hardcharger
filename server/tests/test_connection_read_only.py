@@ -326,3 +326,75 @@ def test_read_only_session_reads_a_view_after_its_definition_changes(controlled)
     assert reader.run(sql="SELECT total FROM ro_totals").to_pylist() == [{"total": 6}]
     admin.run(sql="CREATE OR REPLACE VIEW ro_totals AS SELECT count(*) AS total FROM ro_orders")
     assert reader.run(sql="SELECT total FROM ro_totals").to_pylist() == [{"total": 3}]
+
+
+@pytest.mark.parametrize("definition", ["SELECT * FROM range(nextval('ro_ids'))", "SELECT * FROM range(setval('ro_ids', 4242))"])
+def test_a_view_the_reader_holds_no_privilege_on_moves_nothing(controlled, definition):
+    # The reader may use the sequence and read one table; the administrator owns a view over
+    # the sequence that the reader has no grant on, so access control hides its definition
+    # from the reader's listing. 2.13.0 answered 403 permission_denied after the sequence had moved.
+    controlled.admin.run(sql=f"CREATE VIEW ro_next_ids AS {definition}")  # (creating it binds it once, in the administrator's session)
+    before = controlled.sequence()
+    reader = controlled.session(who="ordinary user", read_only=True)
+    assert reader.run(sql="SELECT count(*) AS n FROM ro_orders").to_pylist() == [{"n": 3}]
+    for prepare in (False, True):
+        problem = refusal(reader, "SELECT * FROM ro_next_ids", prepare=prepare)
+        assert problem.status == 403 and problem.code in ("permission_denied", "read_only"), problem
+        assert controlled.sequence() == before, prepare
+    # A grant made after the session's first statement: the view is the reader's to read now,
+    # and reading it would move the sequence. Refused as read_only, nothing moved.
+    controlled.admin.run(sql="GRANT SELECT ON ro_next_ids TO ro_reader_role")
+    before = controlled.sequence()  # (the GRANT is the administrator's statement)
+    for sql in ("SELECT * FROM ro_next_ids", "SELECT count(*) FROM ro_next_ids", "SELECT id FROM ro_orders WHERE id IN (SELECT * FROM ro_next_ids)"):
+        problem = refusal(reader, sql)
+        assert (problem.status, problem.code, problem.sqlstate) == (403, "read_only", "25006"), (sql, problem)
+        assert controlled.sequence() == before, sql
+        try:  # prepared: refused then, or accepted and refused when executed
+            prepared = reader.prepare(sql=sql)
+        except ChargewireError as refused_at_prepare:
+            assert refused_at_prepare.code == "read_only", refused_at_prepare
+        else:
+            with pytest.raises(ChargewireError) as caught:
+                reader.execute_prepared(prepared_id=prepared)
+            assert caught.value.code == "read_only", caught.value
+        assert controlled.sequence() == before, "prepared " + sql
+    # The twins: the reader still reads what it could, and the same principal's read-write
+    # session reads the view, which moves the sequence.
+    assert reader.run(sql="SELECT id FROM ro_orders_view ORDER BY id").to_pylist() == [{"id": 2}, {"id": 3}]
+    writer = controlled.session(who="ordinary user", read_only=False)
+    assert writer.run(sql="SELECT count(*) AS n FROM ro_next_ids").num_rows == 1  # answered, where the reader was refused
+    if "nextval" in definition:
+        assert controlled.sequence() == before + 1
+
+
+def test_a_view_named_like_one_of_duckdbs_own_stops_nobody_elses_connection(controlled):
+    # `tables`, `columns`, `views` are views of DuckDB's own and ordinary names for a schema of
+    # metadata. A user who may create views in one schema makes them there, with a definition
+    # a read-only connection may not run itself (a table function over a function call). No
+    # other user's read-only connection is answered differently for it: the administrator's,
+    # a reader's that can see the schema, one opened before and one opened after.
+    admin = controlled.admin
+    for sql in ("CREATE SCHEMA ro_shared", "CREATE TABLE ro_shared.facts AS SELECT 1 AS i", "CREATE ROLE ro_maker",
+                f"CREATE USER ro_mallory WITH PASSWORD '{READER_PASSWORD}'", "GRANT ro_maker TO ro_mallory",
+                "GRANT CREATE VIEW, DROP VIEW ON SCHEMA ro_shared TO ro_maker", "GRANT SELECT ON SCHEMA ro_shared TO ro_reader_role"):
+        admin.run(sql=sql)
+    before = [controlled.session(who=who, read_only=True) for who in ("ordinary user", "administrator")]
+    for session in before:
+        assert session.run(sql="SELECT 1 AS one").to_pylist() == [{"one": 1}]
+    mallory = controlled.rbac.client(token=controlled.rbac.password_token(user="ro_mallory", password=READER_PASSWORD))
+    for view in ("tables", "columns", "views"):
+        mallory.run(sql=f"CREATE VIEW ro_shared.{view} AS SELECT * FROM unnest(string_split('a,b', ','))")
+    after = [controlled.session(who=who, read_only=True) for who in ("ordinary user", "administrator")]
+    for session in before + after:
+        assert session.run(sql="SELECT 1 AS one").to_pylist() == [{"one": 1}]
+        assert session.run(sql="SELECT count(*) AS n FROM ro_orders").to_pylist() == [{"n": 3}]
+        assert session.run(sql="SELECT count(*) AS n FROM ro_shared.facts").to_pylist() == [{"n": 1}]
+        assert session.run(sql="SELECT count(*) AS n FROM range(?)", parameters=[2]).to_pylist() == [{"n": 2}]
+        for sql in ("SHOW TABLES", "SELECT count(*) FROM information_schema.tables", "SELECT count(*) FROM information_schema.columns",
+                    "PRAGMA table_info('ro_orders')", "EXPLAIN SELECT 1"):
+            assert session.run(sql=sql).num_rows >= 1, sql
+        assert session.metadata(kind="tables").num_rows >= 1
+        assert session.execute_prepared(prepared_id=session.prepare(sql="SELECT count(*) AS n FROM ro_orders")).to_pylist() == [{"n": 3}]
+        # The view itself is a view like any other.
+        assert session.run(sql="SELECT count(*) AS n FROM ro_shared.tables").to_pylist() == [{"n": 2}]
+    assert controlled.rows() == 3 and controlled.sequence() is None
