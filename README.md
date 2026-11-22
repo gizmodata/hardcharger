@@ -64,10 +64,12 @@ Enterprise in GizmoSQL is in every Hardcharger build.
 
 - 🦆 **Hardcharger Engine inside.** A standalone server on the v2 C API of
   [Hardcharger Engine 2.0.1](https://github.com/gizmodata/hardcharger-engine), not an extension. The
-  engine is GizmoData's fork of [DuckDB 2.0.1](https://duckdb.org), with thanks to the DuckDB
-  team, made faster at selective joins, filtered scans and repeated string operations
-  ([changes and benchmark notes](https://github.com/gizmodata/hardcharger-engine/blob/v2.0.1/docs/optimizations.md)).
-  DuckDB's SQL, extensions and files work as they do in DuckDB.
+  engine is [DuckDB 2.0.1](https://duckdb.org), the DuckDB team's work, with targeted
+  performance changes from GizmoData on top: join planning for OR conditions under `DISTINCT`
+  and for timestamp-to-date keys, integer range filters, filtered scans, read-ahead, substring
+  search and regex extraction
+  ([the changes and what we measured](https://github.com/gizmodata/hardcharger-engine/blob/v2.0.1/docs/optimizations.md)).
+  DuckDB's SQL syntax, extensions and file format are unchanged.
 - ⚡ **Chargewire on the wire.** A query and its first rows come back in one HTTP round trip.
   Large results stream as Arrow IPC, compressed with LZ4 or zstd when asked, and can be resumed. Bulk ingest
   streams Arrow straight into a table.
