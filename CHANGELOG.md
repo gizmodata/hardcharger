@@ -181,7 +181,7 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Changed
 
-- Chargewire 2.6.1: the C++ SDK and protocol release this server builds on. It carries the
+- Chargewire 2.6.2: the C++ SDK and protocol release this server builds on. It carries the
   trusted-proxy secret, sign-in context for lockouts, and the idle-session fixes.
 
 - CI checks Clang thread-safety annotations, treats native compiler warnings as errors and
