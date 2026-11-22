@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # the merge base with the pull request's base
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Changed C/C++ lines are formatted
         env:
           # A pull request: its base; a manual run: main.

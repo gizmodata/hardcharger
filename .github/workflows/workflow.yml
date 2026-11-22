@@ -89,7 +89,7 @@ jobs:
       - name: No version labels in the docs
         working-directory: .
         run: python3 .github/scripts/check_no_version_labels.py
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       # uv pip, not uv run: uv run locks the [adbc] extra too, and adbc-driver-hardcharger
       # isn't on PyPI yet.
       - name: Install
@@ -147,7 +147,7 @@ jobs:
       HARDCHARGER_PY_TEST_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Install
         run: |
           uv venv .venv --python 3.14
@@ -169,7 +169,7 @@ jobs:
       HARDCHARGER_INSTALL_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Install, with the [adbc] extra from PyPI
         run: |
           uv venv .venv --python 3.14
