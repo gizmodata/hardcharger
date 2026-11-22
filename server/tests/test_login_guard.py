@@ -207,9 +207,13 @@ def test_a_delay_that_ends_lets_one_guess_through_however_many_arrive(launcher, 
     time.sleep(limited(sign_in(server=server, user="u4", password="wrong-password", address="198.18.0.7")))
     statuses = burst(server=server, pairs=[(f"other{i}", "198.18.0.7") for i in range(30)])
     assert statuses.count(401) == 1 and statuses.count(429) == 29, statuses
-    # The twin: the right password, after the delay, is checked and signs in.
-    time.sleep(limited(sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200")))
-    assert sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200").status_code == 200
+    # The right password signs in once the delay is over. The address checks above can
+    # already have used up this user's delay on a slow runner.
+    response = sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200")
+    if response.status_code == 429:
+        time.sleep(limited(response))
+        response = sign_in(server=server, user="joe", password=JOE_PASSWORD, address="198.51.100.200")
+    assert response.status_code == 200
 
 
 # ---- Behind a proxy ----

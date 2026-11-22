@@ -196,8 +196,10 @@ def test_init_sql_with_unclosed_parentheses_stops_the_server_at_once(launcher, c
 
 
 def test_the_refusal_says_how_many_and_where_and_is_recorded(server, user):
-    error, _ = outcome(session=user, sql="SELECT abs(1), ((2 + 3)")
-    assert error == never_closed(count=1, position=16), error
+    sql = "SELECT abs(1), ((2 + 3)"
+    expected = {"sql_text": sql, "prepare_error": never_closed(count=1, position=16)}
+    error, _ = outcome(session=user, sql=sql)
+    assert error == expected["prepare_error"], error
     # In a request of several, the position is in the statement that has them.
     error, _ = outcome(session=user, sql="SELECT 1; SELECT ((2 + (3)")
     assert error == never_closed(count=2, position=8), error
@@ -205,11 +207,11 @@ def test_the_refusal_says_how_many_and_where_and_is_recorded(server, user):
     deadline = time.monotonic() + 10 * TIMEOUT_SCALE
     while True:
         rows = admin.query(sql="SELECT sql_text, prepare_error FROM _hardcharger_instr.sql_statements "
-                               "WHERE prepare_error LIKE '%never closed%'").to_pylist()
-        if len(rows) >= 2 or time.monotonic() > deadline:
+                               "WHERE sql_text = ?", parameters=[sql]).to_pylist()
+        if expected in rows or time.monotonic() > deadline:
             break
         time.sleep(0.05)
-    assert {"sql_text": "SELECT abs(1), ((2 + 3)", "prepare_error": never_closed(count=1, position=16)} in rows, rows
+    assert expected in rows, rows
 
 
 @pytest.mark.parametrize("sql,expected", [
