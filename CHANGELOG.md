@@ -7,6 +7,10 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Android release UI checks recover from temporary emulator ADB disconnects during setup and evidence collection.
+
 ## [2.14.0] - 2026-11-21
 
 ### Added
