@@ -1194,13 +1194,16 @@ jobs:
       - name: Hardcharger tests (ASan, UBSan)
         working-directory: server/tests
         env:
-          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          # log_path: every report goes to a file of its own, also one made while a server shuts
+          # down after its test's last assertion; the "Sanitizer reports" step fails on any.
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=1:log_path=${{ github.workspace }}/asan-reports/asan
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1:log_path=${{ github.workspace }}/asan-reports/ubsan
           HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-unit-tests
           HARDCHARGER_TEST_CLIENT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger
           HARDCHARGER_TEST_CLIENT_TESTS_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-client-tests
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/asan-reports"
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -r pyproject.toml
           # In parallel, then the `serial` tests alone (as in the build job).
@@ -1210,8 +1213,10 @@ jobs:
       - name: Chargewire conformance suite (ASan, UBSan)
         working-directory: third_party/chargewire/conformance
         env:
-          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=1
-          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+          # log_path: every report goes to a file of its own, also one made while a server shuts
+          # down after its test's last assertion; the "Sanitizer reports" step fails on any.
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=1:log_path=${{ github.workspace }}/asan-reports/asan
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1:log_path=${{ github.workspace }}/asan-reports/ubsan
           CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
           # tests fail here, where they would otherwise skip, saying so.
@@ -1246,6 +1251,34 @@ jobs:
           key="$(openssl rand -hex 32)"
           export CHARGEWIRE_TEST_AUTHZ_SERVER_ENV="HARDCHARGER_RBAC_STORE_URI=duckdb:{tmp}/rbac.duckdb HARDCHARGER_SECRET_KEY=$key"
           .venv/bin/python -m pytest -q
+      # A report made where no test was looking (a server's shutdown, after its test passed) kills
+      # that process but fails nothing by itself: any report file fails the job here.
+      - name: Sanitizer reports
+        if: always()
+        run: |
+          shopt -s nullglob
+          reports=("$GITHUB_WORKSPACE"/asan-reports/*)
+          if [ ${#reports[@]} -eq 0 ]; then
+            echo "No AddressSanitizer or UndefinedBehaviorSanitizer reports." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Sanitizers: ${#reports[@]} processes reported"
+            echo
+            { grep -h "^SUMMARY: " "${reports[@]}" || true; } | sort | uniq -c | sort -rn | sed 's/^/    /'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          for report in "${reports[@]}"; do
+            echo "::group::$report"
+            cat "$report"
+            echo "::endgroup::"
+          done
+          exit 1
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: asan-reports
+          path: asan-reports/
+          if-no-files-found: ignore
       - name: Server log
         if: failure()
         run: tail -200 "$RUNNER_TEMP/conformance-server.log" || true
