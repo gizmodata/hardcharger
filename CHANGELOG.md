@@ -226,6 +226,7 @@ own changelog in `python/CHANGELOG.md`.
 - Verify Hardcharger’s expression depth cap and disabled autocomplete in Chargewire conformance tests.
 - Refuse disabled autocomplete before execution or automatic installation on every build.
 - Keep login-delay and statement instrumentation regression checks reliable on slower runners.
+- Make instrumentation queue saturation and shutdown tests independent of writer scheduling.
 - SQL log redaction no longer crashes on one-token statements such as `BEGIN`, `COMMIT`, or `ROLLBACK`.
 - Read-only connections enforce sequence and table-function restrictions when DuckDB binds views and macros.
 - A blocked macro replacement reports catalog dependencies and names only objects the caller can see.

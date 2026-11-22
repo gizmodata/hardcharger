@@ -274,24 +274,21 @@ TEST(InstrumentationTest, AFullQueueDropsCountsAndReportsNewRecords) {
   InstrumentationLimits limits;
   limits.max_queued_bytes = 64 * 1024;
   constexpr int kStatements = 2000;
-  std::chrono::steady_clock::duration recording{};
   {
     Instrumentation instrumentation(*f.runtime, f.db.instance.get(), "v2.0.0", limits);
-    instrumentation.SetWriteDelayForTesting(milliseconds(300));
+    instrumentation.PauseWritesUntilStopForTesting();
     instrumentation.Attach();
     instrumentation.Start();
     instrumentation.RecordSessionStarted(SessionRow("s_full"));
-    const auto started = std::chrono::steady_clock::now();
     for (int i = 0; i < kStatements; i++) {
       instrumentation.RecordStatement(Statement(std::format("q_f{:05}", i), "s_full"));
     }
-    recording = std::chrono::steady_clock::now() - started;
+    // Recording finished even though the writer has not taken anything from the queue.
+    EXPECT_EQ(f.stats().written.load(), 0u);
     EXPECT_GT(f.stats().dropped.load(), 0u);
     EXPECT_GT(f.stats().queued.load(), 0);
     instrumentation.Stop();
   }
-  // 2000 records against a writer that sleeps 300 ms a batch: recording didn't wait for it.
-  EXPECT_LT(std::chrono::duration_cast<milliseconds>(recording).count(), 250);
   const uint64_t dropped = f.stats().dropped.load();
   const uint64_t written = f.stats().written.load();
   EXPECT_EQ(written + dropped, static_cast<uint64_t>(kStatements) + 1);
@@ -306,9 +303,13 @@ TEST(InstrumentationTest, AFullQueueDropsCountsAndReportsNewRecords) {
 TEST(InstrumentationTest, ShutdownWritesTheBacklog) {
   Fixture f("drain");
   constexpr int kThreads = 8, kPerThread = 2500;
+  constexpr int kEvents = kThreads * (3 * kPerThread + 1);
+  InstrumentationLimits limits;
+  limits.max_batch_events = 16 * 1024;
+  limits.drain_deadline = std::chrono::minutes(2);
   {
-    Instrumentation instrumentation(*f.runtime, f.db.instance.get(), "v2.0.0");
-    instrumentation.SetWriteDelayForTesting(milliseconds(100));  // a backlog builds up
+    Instrumentation instrumentation(*f.runtime, f.db.instance.get(), "v2.0.0", limits);
+    instrumentation.PauseWritesUntilStopForTesting();
     instrumentation.Attach();
     instrumentation.Start();
     std::vector<std::thread> threads;
@@ -329,9 +330,11 @@ TEST(InstrumentationTest, ShutdownWritesTheBacklog) {
       });
     }
     for (auto& thread : threads) thread.join();
-    EXPECT_GT(f.stats().queued.load(), 0);  // still queued when Stop() begins
+    EXPECT_EQ(f.stats().queued.load(), kEvents);
     instrumentation.Stop();
   }
+  EXPECT_EQ(f.stats().written.load(), static_cast<uint64_t>(kEvents));
+  EXPECT_EQ(f.stats().queued.load(), 0);
   EXPECT_EQ(f.stats().dropped.load(), 0u);
   EXPECT_EQ(f.db.Query("SELECT count(*) || '/' || count(*) FILTER (status = 'success' AND rows_fetched = 1 AND "
                        "cursor_close_time IS NOT NULL) FROM _hardcharger_instr.main.sql_executions"),

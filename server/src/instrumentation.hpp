@@ -154,6 +154,8 @@ class Instrumentation {
   // each write (a slow catalog).
   void EnqueueForTesting(std::string sql) { Enqueue(Event{RawSql{std::move(sql)}}); }
   void SetWriteDelayForTesting(std::chrono::milliseconds delay) { write_delay_ms_ = delay.count(); }
+  // Call before Start() to keep every event queued until Stop() begins draining.
+  void PauseWritesUntilStopForTesting() { pause_writes_until_stop_for_testing_ = true; }
 
  private:
   struct RawSql {
@@ -216,6 +218,7 @@ class Instrumentation {
   bool stopped_ HC_GUARDED_BY(mutex_) = false;
   std::chrono::steady_clock::time_point drain_until_ HC_GUARDED_BY(mutex_);
   std::atomic<int64_t> write_delay_ms_{0};  // tests only
+  bool pause_writes_until_stop_for_testing_ = false;  // set before the writer starts
   std::thread writer_;
 };
 

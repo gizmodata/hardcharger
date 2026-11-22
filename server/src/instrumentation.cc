@@ -763,7 +763,9 @@ void Instrumentation::WriterLoop() {
   std::optional<std::chrono::steady_clock::time_point> reported_at;  // the last drop report
   UniqueMutexLock lock(mutex_);
   for (;;) {
-    wake_.wait(lock.native(), [this]() HC_REQUIRES(mutex_) { return stopping_ || !queue_.empty(); });
+    wake_.wait(lock.native(), [this]() HC_REQUIRES(mutex_) {
+      return stopping_ || (!pause_writes_until_stop_for_testing_ && !queue_.empty());
+    });
     if (queue_.empty() && stopping_) break;
     if (stopping_ && std::chrono::steady_clock::now() >= drain_until_) {
       // Past the drain deadline: what is left is dropped, and said so.
