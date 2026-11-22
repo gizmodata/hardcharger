@@ -5,9 +5,11 @@ import json
 import pathlib
 import time
 
+import httpx
 import psycopg
 import pytest
 
+from conftest import TIMEOUT_SCALE
 from rbac import ChargewireError, rbac_env, start_rbac_server
 from test_rbac_system_admin_upgrade import wait_for
 from test_rbac_token_provisioning import ISSUER, exchange, idp, idp_env
@@ -200,3 +202,38 @@ def test_failed_migration_keeps_format_retryable(launcher, request, tmp_path, co
     with psycopg.connect(conninfo=uri) as conn:
         for table, current in FORMATS.items():
             assert conn.execute(query=VERSION.format(table)).fetchone() == (current,)
+
+
+def test_servers_starting_together_on_a_new_postgres_instrumentation_schema_all_come_up(launcher, pg_store):
+    """Three servers started at once on an empty database: one sets up the instrumentation schema
+    while the others wait for it, then they open what it made (2.14.0 candidate: two of three exited
+    with a duplicate key on the PostgreSQL catalog)."""
+    for _ in range(3):
+        uri = pg_store.new_database()
+        args = ["--enable-instrumentation", "--init-sql-commands", f"ATTACH '{uri}' AS history (TYPE postgres)",
+                "--instrumentation-catalog", "history", "--instrumentation-schema", "instr"]
+        runnings = [launcher.start(env=rbac_env(store_uri=uri), args=args, expect_up=False) for _ in range(3)]
+        try:
+            outcome = [None] * len(runnings)
+            deadline = time.monotonic() + 90 * TIMEOUT_SCALE
+            while time.monotonic() < deadline and None in outcome:
+                for index, running in enumerate(runnings):
+                    if outcome[index] is not None:
+                        continue
+                    code = running.process.poll()
+                    if code is not None:
+                        outcome[index] = f"exited {code}"
+                        continue
+                    try:
+                        if httpx.get(url=f"{running.base_url}/chargewire", timeout=1).status_code == 200:
+                            outcome[index] = "up"
+                    except httpx.HTTPError:
+                        pass
+                time.sleep(0.05)
+            assert outcome == ["up"] * len(runnings), [(o, r.log()[-600:]) for o, r in zip(outcome, runnings)]
+        finally:
+            for running in runnings:
+                running.stop()
+        with psycopg.connect(conninfo=uri) as connection:
+            assert connection.execute(query=VERSION.format("instr.store_metadata")).fetchone() == ("1.1",)
+            assert connection.execute(query="SELECT count(*) FROM instr.instances").fetchone() == (3,)

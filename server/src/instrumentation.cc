@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <chrono>
 #include <format>
+#include <string_view>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 
@@ -561,6 +564,13 @@ void Instrumentation::InitializeSchema() {
   };
   const auto prefix = Quoted(catalog_) + "." + Quoted(schema_);
   const auto meta = postgres_ ? NativeTable("store_metadata") : Table("store_metadata");
+  // Servers starting together on one PostgreSQL schema take turns for the whole setup: in
+  // PostgreSQL, CREATE ... IF NOT EXISTS does not see another transaction's uncommitted
+  // schema or table and fails with a duplicate key once that transaction commits. The lock
+  // ends with this transaction. The key is "HCINSTR1". A server that waited here still has
+  // the snapshot it took before the wait (the extension's transactions are REPEATABLE READ),
+  // so it misses what the other server made; Start() runs the setup again in a new one.
+  if (postgres_) native("SELECT pg_advisory_xact_lock(5207086194924737073)");
   if (postgres_) native("CREATE SCHEMA IF NOT EXISTS " + Quoted(schema_));
   native("CREATE TABLE IF NOT EXISTS " + meta + " (key VARCHAR PRIMARY KEY, value VARCHAR)");
   if (postgres_) {
@@ -649,17 +659,29 @@ void Instrumentation::Start() {
     }
     postgres_ = true;
   }
-  chargewire_duckdb::RunSql(connection_.get(), "BEGIN");
-  try {
-    InitializeSchema();
-    chargewire_duckdb::RunSql(connection_.get(), "COMMIT");
-  } catch (...) {
+  // A server that waited for another's setup (InitializeSchema) runs it again in a new
+  // transaction, which sees what the other made. A server without the lock (2.13) can still
+  // win a race on the PostgreSQL catalog: try again a few times, as the RBAC store does.
+  for (int attempt = 0;; ++attempt) {
+    chargewire_duckdb::RunSql(connection_.get(), "BEGIN");
     try {
-      chargewire_duckdb::RunSql(connection_.get(), "ROLLBACK");
-    } catch (...) {
-      // A failed commit may already have ended the transaction.
+      InitializeSchema();
+      chargewire_duckdb::RunSql(connection_.get(), "COMMIT");
+      break;
+    } catch (const std::exception& error) {
+      try {
+        chargewire_duckdb::RunSql(connection_.get(), "ROLLBACK");
+      } catch (...) {
+        // A failed commit may already have ended the transaction.
+      }
+      const std::string_view message = error.what();
+      const bool raced = postgres_ && (message.find("duplicate key value") != std::string_view::npos ||
+                                       message.find("already exists") != std::string_view::npos ||
+                                       message.find("does not exist") != std::string_view::npos);
+      if (!raced || attempt >= 4) throw;
+      if (postgres_) chargewire_duckdb::RunSql(connection_.get(), "CALL postgres_clear_cache()");
+      std::this_thread::sleep_for(std::chrono::milliseconds(100 * (attempt + 1)));
     }
-    throw;
   }
   // Rows a previous run left open (it was killed). Only in our own file: a shared
   // catalog's open rows may belong to live peers.
