@@ -351,7 +351,9 @@ reach a user only when it is no more than the session:
 
 This one rule covers a new password, removing it, `ENABLE` (a disabled account that holds more
 than the session stays disabled), `DISABLE` and `DROP`. `ALTER USER … SET / UNSET ATTRIBUTE`
-is refused to holders outright: setting an attribute is granting data.
+is refused to holders outright: setting an attribute is granting data. `ALTER USER … SET / UNSET
+IDENTITY PROVIDER` is the unrestricted administrator's alone (the administrator, or a session
+acting as System Admin): the recorded SSO identity decides who signs in as the user.
 
 **The target boundary for roles** (`RequireRoleWithinReach`). `DROP ROLE` reaches a role
 when everything it inherits is in the session's roles (what it inherits through the

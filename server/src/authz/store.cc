@@ -1474,6 +1474,12 @@ arrow::Status StoreTransaction::LinkIdentity(const std::string& user_id, const P
       .status();
 }
 
+arrow::Status StoreTransaction::UnlinkIdentity(const std::string& user_id) {
+  return Run(conn_, "UPDATE " + T("users") + " SET idp_issuer = NULL, idp_subject = NULL WHERE user_id = $1",
+             {Text(user_id)})
+      .status();
+}
+
 arrow::Status StoreTransaction::UpdateUser(const UserRecord& user) {
   return Run(conn_,
              "UPDATE " + T("users") + " SET password_hash = $2, enabled = $3 WHERE user_id = $1",

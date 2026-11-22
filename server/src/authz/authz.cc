@@ -438,31 +438,48 @@ void AccessControl::SetPasswordAttempts(PasswordAttempts attempts) { password_at
 namespace {
 
 AccessControl::TokenUser MatchTokenUser(RbacEngine& engine, const std::string& user_id,
-                                        const ProviderIdentity& identity, bool read_only) {
+                                        const ProviderIdentity& identity, AccessControl::TokenName name_source,
+                                        bool read_only) {
   if (identity.issuer.empty() || identity.subject.empty()) {
     throw Error(ErrorCode::kInvalidCredentials, "SSO sign-in requires a verified issuer and subject");
   }
   AccessControl::TokenUser out;
   auto snapshot = engine.snapshot();
   auto* user = snapshot->FindUserById(user_id);
-  if (user && user->enabled && !user->sso_identity && !read_only) {
+  // The name match signs an unlinked user in (as 2.13 did); it becomes the user's recorded
+  // identity only when the provider vouches for it: a verified e-mail, or a subject that is
+  // the user's name exactly. An unverified e-mail claim can name anyone.
+  const bool trustworthy =
+      user && (name_source == AccessControl::TokenName::kVerifiedEmail ||
+               (name_source == AccessControl::TokenName::kSubject && identity.subject == user->name));
+  if (user && user->enabled && !user->sso_identity && !read_only && trustworthy) {
     auto linked = engine.LinkOnSignIn(user_id, identity);
-    if (!linked.ok()) throw Error(ErrorCode::kInvalidCredentials, linked.status().message());
-    if (*linked) {
-      Audit(LogLevel::kInfo, "linked an existing user on its first SSO sign-in",
-            {{"kind", "access_control"},
-             {"status", "success"},
-             {"method", "sso"},
-             {"user", user->name},
-             {"user_id", user_id},
-             {"issuer", identity.issuer}});
+    if (!linked.ok() && IsStoreUnavailable(linked.status())) {
+      // The store can't record it now: sign in from the snapshot, as without a link, and
+      // record it at a later sign-in that reaches the store.
+      Log(LogLevel::kWarning,
+          "an SSO sign-in's identity was not recorded: the access control store is unavailable; a later sign-in "
+          "records it",
+          {{"user", user->name}, {"user_id", user_id}, {"issuer", identity.issuer}});
+    } else if (!linked.ok()) {
+      throw Error(ErrorCode::kInvalidCredentials, linked.status().message());
+    } else {
+      if (*linked) {
+        Audit(LogLevel::kInfo, "linked an existing user on its first SSO sign-in",
+              {{"kind", "access_control"},
+               {"status", "success"},
+               {"method", "sso"},
+               {"user", user->name},
+               {"user_id", user_id},
+               {"issuer", identity.issuer}});
+      }
+      snapshot = engine.snapshot();
+      user = snapshot->FindUserById(user_id);
     }
-    snapshot = engine.snapshot();
-    user = snapshot->FindUserById(user_id);
   }
   const auto* linked = snapshot->FindUserByIdentity(identity);
   if (!user || !user->enabled || (linked && linked != user) ||
-      (user->sso_identity ? *user->sso_identity != identity : !read_only)) {
+      (user->sso_identity && *user->sso_identity != identity)) {
     throw Error(ErrorCode::kInvalidCredentials, "the sign-in identity does not match an enabled user");
   }
   const auto role = user->attributes.find(kProvisionedRoleAttribute);
@@ -473,15 +490,16 @@ AccessControl::TokenUser MatchTokenUser(RbacEngine& engine, const std::string& u
 }  // namespace
 
 AccessControl::TokenUser AccessControl::RequireStoreUser(const std::string& user_name, const std::string& issuer,
-                                                         const std::string& subject) const {
+                                                         const std::string& subject, TokenName name_source) const {
   RequireFresh(*engine_);
   auto principal = engine_->PrincipalForUser(user_name);
   if (!principal.ok()) throw Error(ErrorCode::kInvalidCredentials, principal.status().message());
-  return MatchTokenUser(*engine_, principal->user_id, {issuer, subject}, read_only_);
+  return MatchTokenUser(*engine_, principal->user_id, {issuer, subject}, name_source, read_only_);
 }
 
 AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& user_name, const std::string& token_role,
-                                                           const std::string& issuer, const std::string& subject) {
+                                                           const std::string& issuer, const std::string& subject,
+                                                           TokenName name_source) {
   RequireFresh(*engine_);
   bool created = false;
   auto principal =
@@ -508,7 +526,7 @@ AccessControl::TokenUser AccessControl::ProvisionStoreUser(const std::string& us
            {"method", "token_auto_provision"}, {"user", user_name}, {"issuer", issuer}, {"role", token_role}});
   }
   if (created && read_only_) return {.readonly = token_role == "readonly", .created = true};
-  TokenUser out = MatchTokenUser(*engine_, principal->user_id, {issuer, subject}, read_only_);
+  TokenUser out = MatchTokenUser(*engine_, principal->user_id, {issuer, subject}, name_source, read_only_);
   out.created = created;
   return out;
 }

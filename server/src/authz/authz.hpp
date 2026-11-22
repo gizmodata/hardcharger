@@ -298,10 +298,20 @@ class AccessControl {
     bool created = false;
   };
 
-  // Match the verified token to an enabled user and record the first issuer/subject pair.
-  // The read-only credential verifier checks the same match without writing it.
-  // Throws chargewire::Error(kInvalidCredentials).
-  TokenUser RequireStoreUser(const std::string& user_name, const std::string& issuer, const std::string& subject) const;
+  // Where a sign-in token's user name came from, which decides whether its first match of an
+  // unlinked user is recorded as that user's SSO identity: an `email` claim the provider says
+  // is verified (`email_verified` true, or "true"), an `email` claim it doesn't, or `sub` (no
+  // `email` claim).
+  enum class TokenName { kVerifiedEmail, kUnverifiedEmail, kSubject };
+
+  // Match the verified token to an enabled user. A user with a recorded issuer/subject pair
+  // must present it. An unlinked one signs in on the name match, and the pair is recorded
+  // only when the match is trustworthy: a verified e-mail, or a `sub` that is the user's
+  // name exactly. Nothing is recorded while the store is unavailable (the sign-in goes on
+  // from the snapshot; a later one records it). The read-only credential verifier checks
+  // the same match without writing it. Throws chargewire::Error(kInvalidCredentials).
+  TokenUser RequireStoreUser(const std::string& user_name, const std::string& issuer, const std::string& subject,
+                             TokenName name_source) const;
 
   // RequireStoreUser for token_auto_provision_users: a user the store doesn't have is
   // created first, with no password and no grants, and the token's role ("user" or
@@ -310,7 +320,7 @@ class AccessControl {
   // (its name is a role's, the administrator's, or an unknown tenant's) or is disabled.
   // Each creation, and each refusal to create, is an audit record naming `issuer`.
   TokenUser ProvisionStoreUser(const std::string& user_name, const std::string& token_role, const std::string& issuer,
-                               const std::string& subject);
+                               const std::string& subject, TokenName name_source);
 
   // A client certificate's identity (spec §4.4): the store's name of the enabled user it
   // names, or nullopt. An e-mail or CN identity compares as user names do (ignoring ASCII

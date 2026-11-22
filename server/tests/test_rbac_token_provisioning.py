@@ -248,7 +248,8 @@ def test_first_match_on_two_replicas_records_one_identity(launcher, pg_store, id
 
     def sign_in(replica, issuer):
         try:
-            exchange(server=replica, subject_token=idp["token"](issuer=issuer, email="reader", sub="123", role="user"))
+            exchange(server=replica, subject_token=idp["token"](issuer=issuer, email="reader", email_verified=True,
+                                                                sub="123", role="user"))
         except ChargewireError as error:
             assert error.code == "invalid_credentials" and "identity does not match" in error.detail
             return None
@@ -262,7 +263,8 @@ def test_first_match_on_two_replicas_records_one_identity(launcher, pg_store, id
         assert sign_in(replica, winners[0]) == winners[0]
         assert replica.admin().run(sql=account).to_pylist() == [{"idp_issuer": winners[0], "idp_subject": "123"}]
     with pytest.raises(ChargewireError, match="already linked to another user"):
-        exchange(server=first, subject_token=idp["token"](issuer=winners[0], email="other_reader", sub="123", role="user"))
+        exchange(server=first, subject_token=idp["token"](issuer=winners[0], email="other_reader", email_verified=True,
+                                                          sub="123", role="user"))
     assert admin.run(sql="SELECT has_sso_link FROM hardcharger_users() WHERE name = 'other_reader'").column(0)[0].as_py() is False
     links = [r for replica in (first, second) for r in replica.running.log_records()
              if r.get("message") == "linked an existing user on its first SSO sign-in"]
@@ -290,6 +292,151 @@ def test_first_sign_ins_on_two_replicas_at_once_all_succeed(launcher, pg_store, 
     created = [r for replica in replicas for r in replica.running.log_records()
                if r.get("message") == "provisioned a user on its first sign-in"]
     assert sorted(r["user"] for r in created) == sorted(names), "each user is created exactly once"
+
+
+NO_MATCH = "the sign-in identity does not match an enabled user"
+UNLINKED = {"idp_issuer": None, "idp_subject": None}
+
+
+def pair(admin, name: str) -> dict:
+    """The user's recorded SSO identity (issuer and subject, NULL when unlinked)."""
+    table = admin.run(sql=f"SELECT idp_issuer, idp_subject FROM hardcharger_users() WHERE name = '{name}'")
+    return table.to_pylist()[0]
+
+
+def signs_in(server, token: str) -> bool:
+    """The token signs in, and its session runs a query."""
+    return exchange(server=server, subject_token=token).run(sql="SELECT 1 AS one").to_pylist() == [{"one": 1}]
+
+
+def no_match(server, token: str) -> None:
+    with pytest.raises(ChargewireError) as refused:
+        exchange(server=server, subject_token=token)
+    assert refused.value.code == "invalid_credentials" and NO_MATCH in refused.value.detail, refused.value
+
+
+@pytest.fixture
+def linking(launcher, store, idp):
+    """A server that trusts ISSUER and OTHER_ISSUER, and its administrator."""
+    server = start_rbac_server(launcher=launcher, store_uri=store.new_database(), env=idp_env(idp=idp, issuer=None))
+    return server, server.admin()
+
+
+def test_only_a_verified_email_records_the_first_match(linking, idp):
+    server, admin = linking
+    admin.run(sql="""CREATE USER "owner@example.com" WITH PASSWORD 'owner-password-1'""")
+    admin.run(sql='CREATE USER "strings@example.com"')
+    # Another account of the provider, whose e-mail claim is the owner's name but unverified:
+    # it signs in as 2.13 let it, and records nothing, so the owner can still link.
+    for verified in ({}, {"email_verified": False}, {"email_verified": "false"}, {"email_verified": "TRUE"},
+                     {"email_verified": 1}):
+        token = idp["token"](email="owner@example.com", sub="not-the-owner", role="user", **verified)
+        assert signs_in(server=server, token=token), verified
+        assert pair(admin=admin, name="owner@example.com") == UNLINKED, verified
+    assert not [r for r in server.running.log_records() if r.get("message") == "linked an existing user on its first SSO sign-in"]
+    # The owner's verified sign-in records its pair; from then on the other account is refused.
+    owner = idp["token"](email="owner@example.com", email_verified=True, sub="owner-001", role="user")
+    assert signs_in(server=server, token=owner)
+    assert pair(admin=admin, name="owner@example.com") == {"idp_issuer": ISSUER, "idp_subject": "owner-001"}
+    no_match(server=server, token=idp["token"](email="owner@example.com", sub="not-the-owner", role="user"))
+    no_match(server=server, token=idp["token"](email="owner@example.com", email_verified=True, sub="not-the-owner",
+                                               role="user"))
+    assert signs_in(server=server, token=owner)  # the twin: the recorded pair
+    assert server.user(name="owner@example.com", password="owner-password-1").run(sql="SELECT 1").num_rows == 1
+    # Providers that send claims as strings: "true" verifies.
+    assert signs_in(server=server, token=idp["token"](email="strings@example.com", email_verified="true",
+                                                      sub="strings-001", role="user"))
+    assert pair(admin=admin, name="strings@example.com") == {"idp_issuer": ISSUER, "idp_subject": "strings-001"}
+    links = [r["user"] for r in server.running.log_records()
+             if r.get("message") == "linked an existing user on its first SSO sign-in"]
+    assert links == ["owner@example.com", "strings@example.com"], links
+
+
+def test_a_subject_that_is_the_user_name_records_the_first_match(linking, idp):
+    server, admin = linking
+    for name in ("svc_reader", "svc_case", "both@example.com"):
+        admin.run(sql=f'CREATE USER "{name}"')
+    # No e-mail claim: the user is named by sub, which is the user's name exactly.
+    assert signs_in(server=server, token=idp["token"](sub="svc_reader", role="user"))
+    assert pair(admin=admin, name="svc_reader") == {"idp_issuer": ISSUER, "idp_subject": "svc_reader"}
+    assert signs_in(server=server, token=idp["token"](sub="svc_reader", role="user"))
+    no_match(server=server, token=idp["token"](issuer=OTHER_ISSUER, sub="svc_reader", role="user"))
+    # A sub that names the user only ignoring case signs in (user names compare that way) and
+    # records nothing: a subject is the provider's exact identifier.
+    assert signs_in(server=server, token=idp["token"](sub="SVC_CASE", role="user"))
+    assert pair(admin=admin, name="svc_case") == UNLINKED
+    # An unverified e-mail claim names the user, even when sub spells the same.
+    assert signs_in(server=server, token=idp["token"](email="both@example.com", sub="both@example.com", role="user"))
+    assert pair(admin=admin, name="both@example.com") == UNLINKED
+
+
+def test_unset_identity_provider_clears_a_link_and_the_owner_links_again(linking, idp):
+    server, admin = linking
+    name = "victim@example.com"
+    admin.run(sql=f"""CREATE USER "{name}" WITH PASSWORD 'victim-password-1'""")
+    admin.run(sql="CREATE ROLE helpdesk")
+    admin.run(sql="GRANT ALTER USER TO helpdesk")
+    admin.run(sql="CREATE USER amy WITH PASSWORD 'amy-password-1'")
+    admin.run(sql="GRANT helpdesk TO amy")
+    # A wrong link (an identity-provider migration, a mistaken SET): the owner is refused.
+    admin.run(sql=f"""ALTER USER "{name}" SET IDENTITY PROVIDER '{ISSUER}' SUBJECT 'wrong-subject'""")
+    owner = idp["token"](email=name, email_verified=True, sub="victim-001", role="user")
+    no_match(server=server, token=owner)
+    # Only an unrestricted administrator unlinks, as only one links.
+    amy = server.user(name="amy", password="amy-password-1")
+    amy.run(sql="SET ROLE helpdesk")
+    for sql, verb in ((f'ALTER USER "{name}" UNSET IDENTITY PROVIDER', "unlink"),
+                      (f"""ALTER USER "{name}" SET IDENTITY PROVIDER '{ISSUER}' SUBJECT 'victim-001'""", "link")):
+        with pytest.raises(ChargewireError) as refused:
+            amy.run(sql=sql)
+        assert f"only an unrestricted administrator can {verb} an SSO identity" in refused.value.detail, refused.value
+    assert pair(admin=admin, name=name) == {"idp_issuer": ISSUER, "idp_subject": "wrong-subject"}
+    assert admin.run(sql=f'ALTER USER "{name}" UNSET IDENTITY PROVIDER').to_pylist() == [
+        {"result": f"SSO identity unlinked from user {name}"}]
+    assert pair(admin=admin, name=name) == UNLINKED
+    linked = f"SELECT has_sso_link FROM hardcharger_users() WHERE name = '{name}'"
+    assert admin.run(sql=linked).column(0)[0].as_py() is False
+    assert admin.run(sql=f'ALTER USER "{name}" UNSET IDENTITY PROVIDER').to_pylist() == [
+        {"result": f"User {name} has no SSO identity"}]
+    # The owner's next verified sign-in records its own pair.
+    assert signs_in(server=server, token=owner)
+    assert pair(admin=admin, name=name) == {"idp_issuer": ISSUER, "idp_subject": "victim-001"}
+    assert server.user(name=name, password="victim-password-1").run(sql="SELECT 1").num_rows == 1
+    changes = [r.get("change") for r in server.running.log_records()
+               if r.get("statement") == "ALTER USER" and r.get("status") == "success" and r.get("audit_hash")]
+    assert changes == ["SSO identity linked", "SSO identity unlinked", "SSO identity unlinked"], changes
+
+
+def test_set_identity_provider_replaces_a_link(linking, idp):
+    server, admin = linking
+    for name in ("mover@example.com", "keeper@example.com"):
+        admin.run(sql=f'CREATE USER "{name}"')
+    old = idp["token"](email="mover@example.com", email_verified=True, sub="old-subject", role="user")
+    assert signs_in(server=server, token=old)
+    assert signs_in(server=server, token=idp["token"](email="keeper@example.com", email_verified=True,
+                                                      sub="keeper-001", role="user"))
+    # The provider changed: the administrator moves the user to its new pair.
+    sql = f"""ALTER USER "mover@example.com" SET IDENTITY PROVIDER '{OTHER_ISSUER}' SUBJECT 'new-subject'"""
+    assert admin.run(sql=sql).to_pylist() == [{"result": "SSO identity replaced for user mover@example.com"}]
+    assert pair(admin=admin, name="mover@example.com") == {"idp_issuer": OTHER_ISSUER, "idp_subject": "new-subject"}
+    no_match(server=server, token=old)
+    assert signs_in(server=server, token=idp["token"](issuer=OTHER_ISSUER, email="mover@example.com",
+                                                      sub="new-subject", role="user"))
+    # The same pair again changes nothing.
+    assert admin.run(sql=sql).to_pylist() == [{"result": "SSO identity linked to user mover@example.com"}]
+    # A pair another user has is refused, and the link stays.
+    with pytest.raises(ChargewireError) as refused:
+        admin.run(sql=f"""ALTER USER "mover@example.com" SET IDENTITY PROVIDER '{ISSUER}' SUBJECT 'keeper-001'""")
+    assert "the SSO identity is already linked to another user" in refused.value.detail, refused.value
+    assert pair(admin=admin, name="mover@example.com") == {"idp_issuer": OTHER_ISSUER, "idp_subject": "new-subject"}
+    assert pair(admin=admin, name="keeper@example.com") == {"idp_issuer": ISSUER, "idp_subject": "keeper-001"}
+    # A sign-in with another user's pair is refused too, verified e-mail or not.
+    admin.run(sql='CREATE USER "fresh@example.com"')
+    no_match(server=server, token=idp["token"](email="fresh@example.com", sub="keeper-001", role="user"))
+    with pytest.raises(ChargewireError, match="the SSO identity is already linked to another user"):
+        exchange(server=server, subject_token=idp["token"](email="fresh@example.com", email_verified=True,
+                                                           sub="keeper-001", role="user"))
+    assert pair(admin=admin, name="fresh@example.com") == UNLINKED
 
 
 @pytest.mark.parametrize(("env", "why"), [

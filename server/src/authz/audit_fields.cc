@@ -83,6 +83,9 @@ struct Describe {
       case AlterUserCommand::Action::kLinkIdentity:
         change = "SSO identity linked";
         break;
+      case AlterUserCommand::Action::kUnlinkIdentity:
+        change = "SSO identity unlinked";
+        break;
       case AlterUserCommand::Action::kSetAttribute:
         change = "attribute " + c.attribute;  // never its value
         break;

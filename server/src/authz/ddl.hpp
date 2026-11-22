@@ -51,7 +51,8 @@ struct AlterUserCommand {
     kClearPassword,
     kEnable,
     kDisable,
-    kLinkIdentity,
+    kLinkIdentity,    // SET IDENTITY PROVIDER: records, or replaces, the user's SSO identity
+    kUnlinkIdentity,  // UNSET IDENTITY PROVIDER: clears it
     kSetAttribute,
     kUnsetAttribute,
     kExpirePassword  // ALTER USER name PASSWORD EXPIRE: the current password must be changed

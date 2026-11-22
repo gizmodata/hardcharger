@@ -230,6 +230,7 @@ class StoreTransaction {
  public:
   arrow::Status InsertUser(const UserRecord& user);
   arrow::Status LinkIdentity(const std::string& user_id, const ProviderIdentity& identity);
+  arrow::Status UnlinkIdentity(const std::string& user_id);
   arrow::Status UpdateUser(const UserRecord& user);
   arrow::Status DeleteUser(const std::string& user_id);
   arrow::Status InsertRole(const RoleRecord& role);
