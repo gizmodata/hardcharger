@@ -111,8 +111,8 @@ test("query windows retain profiles and refresh independently of the monitor", a
 test("query windows copy masked comments without retaining a profile", async ({ page }) => {
   const server = await startOwnServer(["--enable-instrumentation"]);
   const connection = await connect({ url: `${server.url}/chargewire`, ...server.admin });
-  const sql = "SELECT 1 AS masked_profile_probe\n-- clipboard_private_comment";
-  const recordedSql = "SELECT 1 AS masked_profile_probe\n-- ***";
+  const sql = "SELECT 1 AS masked_profile_probe\n-- Clipboard test comment\n-- password=fixture-placeholder";
+  const recordedSql = "SELECT 1 AS masked_profile_probe\n-- Clipboard test comment\n-- password=***";
   try {
     await connection.execute("SET hardcharger.capture_query_profile = 'detailed'");
     await connection.query("SELECT 0 AS enable_profile_first");

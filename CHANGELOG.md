@@ -220,6 +220,7 @@ own changelog in `python/CHANGELOG.md`.
 ### Fixed
 
 - Align statement logging examples and integration coverage with masking for columns named `token`.
+- Verify that query detail windows preserve ordinary comments and copy credential comments with values masked.
 - Seed the shared cache with signed autocomplete before testing startup and access controls.
 - Register access-control binder hooks before database workers start.
 - Verify Hardcharger’s expression depth cap and disabled autocomplete in Chargewire conformance tests.

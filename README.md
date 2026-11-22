@@ -1131,8 +1131,8 @@ value is computed (`token => upper('…')`), by
 that binds more than 1,000 credential values.
 
 **Query profiles** (`capture_query_profile`) hold a statement's text and constants: none is
-captured for a statement in which a value was masked. A comment, a join on a credential-named
-column and an ordinary escaped literal mask nothing, and such statements keep their profile.
+captured for a statement in which a value was masked. An ordinary comment, a join on a
+credential-named column and an ordinary escaped literal keep their profile.
 
 A failed init SQL statement stops the server with one line that says why and which:
 `init SQL failed: <the error, redacted as above> (init SQL statement 2 of 5: <the statement
