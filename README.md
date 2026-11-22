@@ -93,8 +93,8 @@ the window leaves the server running in the macOS menu bar or Windows system tra
 **Quit Hardcharger** stops it.
 
 <p align="center">
-  <img src="docs/assets/desktop-preview-light.png" alt="Hardcharger desktop dashboard design preview, light theme: server controls, database information and the SQL workspace button" width="49%">
-  <img src="docs/assets/desktop-preview-dark.png" alt="Hardcharger desktop dashboard design preview, dark theme" width="49%">
+  <img src="docs/assets/desktop-preview-light.png" alt="Hardcharger desktop app, local server page (design preview), light theme: server status with the Open SQL workspace button, server address, uptime and database size, and the administrator credentials other programs on this computer sign in with" width="49%">
+  <img src="docs/assets/desktop-preview-dark.png" alt="Hardcharger desktop app, local server page (design preview), dark theme" width="49%">
 </p>
 
 The dashboard images show the design preview with sample data. The app runs the same

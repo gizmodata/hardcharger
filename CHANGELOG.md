@@ -9,6 +9,16 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [2.14.0] - 2026-11-22
 
+### Highlights
+
+- **Security functions work in plain SQL**
+  ([#60](https://github.com/gizmodata/hardcharger/issues/60)): `is_role_active('role')`,
+  `session_attribute('key')`, `current_user` / `session_user` / `user` (the Hardcharger user)
+  and `current_role()` (the role `SET ROLE` made active) answer in any statement, view or macro
+  exactly as they do inside a row or masking policy, so you can check what a policy will see:
+  `SELECT is_role_active('hr'), session_attribute('region'), current_user, current_role();`
+  [Docs](https://docs.hardcharger.gizmodata.com/guides/row-policies-and-masking/#the-policy-functions-in-plain-sql-v2140)
+
 ### Added
 
 - Hardcharger uses Hardcharger Engine v2.0.1, GizmoData’s performance-tuned fork of DuckDB 2.0.1.

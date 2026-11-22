@@ -330,6 +330,48 @@ jobs:
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
           echo "web UI checks and browser tests: $ui"
 
+  # The Python package's own checks (workflow.yml's `test` job, without its publishing jobs),
+  # so a v* tag can publish nothing until they pass. workflow.yml runs only on pushes to main,
+  # pull requests and its own tags, so a release built on local branches first met them at the
+  # PyPI publish: 2.14.0's GitHub Release, images and Homebrew went out while three lint errors
+  # held back PyPI. Contents read only: no publish credentials here.
+  python-checks:
+    name: Python package (version, lint, unit tests, build)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v7
+      - name: Python package tracks the server version
+        working-directory: .
+        run: python3 .github/scripts/check_python_version.py
+      - name: No version labels in the docs
+        working-directory: .
+        run: python3 .github/scripts/check_no_version_labels.py
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Install
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -e . --group dev
+      - name: Lint
+        run: |
+          .venv/bin/ruff check src tests
+          .venv/bin/ruff format --check src tests
+      - name: Unit tests
+        run: .venv/bin/python -m pytest -q -m "not integration and not download"
+      - name: Unit tests on the oldest Python supported (3.10)
+        run: |
+          uv venv /tmp/py310 --python 3.10
+          uv pip install --python /tmp/py310/bin/python -e . --group dev
+          /tmp/py310/bin/python -m pytest -q -p no:cacheprovider -m "not integration and not download"
+      - name: Build and check the distributions
+        run: |
+          uv build
+          uvx twine check dist/*
+
   # The UI's lint (eslint, prettier), typecheck (every TypeScript project), unit tests, and
   # the vendored @gizmodata/chargewire against the commit it pins (rebuilt from
   # gizmodata/chargewire-js).
@@ -1506,7 +1548,7 @@ jobs:
   # already passed (changes.outputs.tested), it takes that run's Linux tarballs: the
   # binaries that were tested, not a rebuild.
   image:
-    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android, desktop, checksums]
+    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android, desktop, checksums, python-checks]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.run_rest == 'true'
           && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -1519,7 +1561,8 @@ jobs:
                   && needs.verify-macos.result == 'success' && needs.verify-windows.result == 'success'
                   && needs.ios.result == 'success' && needs.ios-archive.result == 'success'
                   && needs.android.result == 'success'
-                  && needs.desktop.result == 'success' && needs.checksums.result == 'success')) }}
+                  && needs.desktop.result == 'success' && needs.checksums.result == 'success'
+                  && needs.python-checks.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1947,7 +1990,7 @@ jobs:
   # fails unless every job it needs succeeded (none skipped) and the run signed.
   release:
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
-    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive, desktop, android]
+    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, image, windows, checksums, verify-macos, verify-windows, ios, ios-archive, desktop, android, python-checks]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -1961,7 +2004,7 @@ jobs:
         run: |
           echo "needed jobs: $RESULTS"
           echo "signed: $SIGN; macOS signatures: $MACOS; Windows signatures: $WINDOWS"
-          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 17 ] || { echo "expected the results of 17 jobs"; exit 1; }
+          [ "$(jq -r 'length' <<< "$RESULTS")" -eq 18 ] || { echo "expected the results of 18 jobs"; exit 1; }
           [ "$(jq -r 'map(select(. != "success")) | length' <<< "$RESULTS")" -eq 0 ] || { echo "a needed job did not succeed"; exit 1; }
           [ "$SIGN" = true ] && [ "$MACOS" = success ] && [ "$WINDOWS" = success ] || { echo "the release is not signed"; exit 1; }
       - uses: actions/checkout@v7
