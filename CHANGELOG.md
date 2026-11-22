@@ -218,6 +218,7 @@ own changelog in `python/CHANGELOG.md`.
 - Align statement logging examples and integration coverage with masking for columns named `token`.
 - Seed the shared cache with signed autocomplete before testing startup and access controls.
 - Register access-control binder hooks before database workers start.
+- Verify Hardcharger’s expression depth cap and disabled autocomplete in Chargewire conformance tests.
 - SQL log redaction no longer crashes on one-token statements such as `BEGIN`, `COMMIT`, or `ROLLBACK`.
 - Read-only connections enforce sequence and table-function restrictions when DuckDB binds views and macros.
 - A blocked macro replacement reports catalog dependencies and names only objects the caller can see.

@@ -381,6 +381,8 @@ jobs:
           # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
           # tests fail here, where they would otherwise skip, saying so.
           CHARGEWIRE_TEST_REQUIRE_READ_ONLY: "1"
+          CHARGEWIRE_TEST_DUCKDB_EXPRESSION_DEPTH_CAPPED: "1"
+          CHARGEWIRE_TEST_DUCKDB_AUTOCOMPLETE_DISABLED: "1"
           HARDCHARGER_ADMIN_USERNAME: chargewire
           HARDCHARGER_PRINT_QUERIES: "false"
         run: |
