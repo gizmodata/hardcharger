@@ -1099,8 +1099,10 @@ jobs:
       || (needs.changes.outputs.run_asan == 'true' && (inputs.full == true || inputs.only == 'asan'))
     runs-on: ubuntu-24.04-arm
     env:
-      # Six workers starve the instrumented servers (password sign-ins time out); four pass.
-      HARDCHARGER_TEST_XDIST_WORKERS: "4"
+      # Leave CPU and memory for the instrumented servers on the four-core ARM runner.
+      HARDCHARGER_TEST_XDIST_WORKERS: "2"
+      HARDCHARGER_TEST_TIMEOUT_SCALE: "5"
+      HARDCHARGER_TEST_PERF_SCALE: "5"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -1196,7 +1198,7 @@ jobs:
           uv pip install --python .venv/bin/python -r pyproject.toml
           # In parallel, then the `serial` tests alone (as in the build job).
           echo "CPUs: $(getconf _NPROCESSORS_ONLN); pytest-xdist workers: $HARDCHARGER_TEST_XDIST_WORKERS"
-          .venv/bin/python -m pytest -q -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial" --durations=10
+          .venv/bin/python -m pytest -v -n "$HARDCHARGER_TEST_XDIST_WORKERS" -m "not serial" --durations=10
           .venv/bin/python -m pytest -q -m serial --durations=5
       - name: Chargewire conformance suite (ASan, UBSan)
         working-directory: third_party/chargewire/conformance
