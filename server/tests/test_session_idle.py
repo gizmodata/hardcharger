@@ -1,13 +1,10 @@
 """Port of GizmoSQL 1.x tests/integration/test_session_idle.cpp (5 cases).
 
-1.x unit-tested its eviction rule; the rule is the Chargewire SDK's here (a session with no
-request for session_idle_timeout seconds, nothing running and no retained result is
-ended, checked every 5 s), so each case runs against a server with
-session_idle_timeout (HARDCHARGER_SESSION_IDLE_TIMEOUT). An ended session answers 404
-session_not_found. All 5 apply.
+The Chargewire SDK checks for idle sessions every five seconds. These tests exercise
+session_idle_timeout through a live server. A status request waiting on a statement
+counts as activity until the response ends. An evicted session returns 404 session_not_found.
 """
 
-import threading
 import time
 
 import pytest
@@ -58,9 +55,7 @@ def test_sql_activity_refreshes_clock(launcher):
 
 def test_in_flight_sql_not_idle(server):
     session = server.admin()
-    done = {}
-    worker = threading.Thread(target=lambda: done.setdefault("doc", session.execute(sql="SELECT sleep_ms(9000)")))
-    worker.start()
-    worker.join(timeout=30)
-    assert done["doc"]["state"] == "succeeded", done
+    # execute() long-polls status with Prefer: wait=5, longer than the 2 s idle timeout.
+    doc = session.execute(sql="SELECT sleep_ms(9000)")
+    assert doc["state"] == "succeeded", doc
     assert alive(session=session), "a session running SQL past its idle timeout must not be ended"

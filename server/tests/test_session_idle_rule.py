@@ -51,9 +51,7 @@ def test_a_running_statement_keeps_the_session_only_while_a_request_waits_on_it(
                            headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
     assert response.status_code in (200, 201, 202), response.text
     gone_id = response.json()["statement_id"]
-    # Hold one request across the timeout and a sweep. Consecutive shorter long-polls
-    # leave a gap between responses and requests; because the preceding request began
-    # more than IDLE seconds ago, a sweep in that gap may legitimately evict the session.
+    # This client keeps its submit request open across the timeout and a sweep.
     polled = server.admin()
     started = time.monotonic()
     response = polled.submit(sql="SELECT sleep_ms(12000) AS slept",

@@ -216,6 +216,9 @@ own changelog in `python/CHANGELOG.md`.
 
 ### Fixed
 
+- Fixed idle session eviction between consecutive status requests for a long-running statement.
+  The idle timeout starts again when the server finishes responding to a waiting client.
+
 - Android release UI checks recover from temporary emulator ADB disconnects during setup and evidence collection.
 
 - Align statement logging examples and integration coverage with masking for columns named `token`.
