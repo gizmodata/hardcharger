@@ -22,6 +22,9 @@ own changelog in `python/CHANGELOG.md`.
 - Administrators can link SSO identities to RBAC users and list accounts with both SSO and
   password sign-in in `hardcharger_users()`. After upgrade, the first verified SSO sign-in
   matching an unlinked account records its issuer and subject and preserves the local password.
+  A link is recorded only when the provider vouches for the name (a verified e-mail, or a subject
+  that is the user's name), not while the store is down, and an administrator can replace it with
+  `SET IDENTITY PROVIDER` or clear it with `ALTER USER … UNSET IDENTITY PROVIDER`.
 - **Web UI: start read-only from the sign-in page, or from a link**
   ([#61](https://github.com/gizmodata/hardcharger/issues/61)). The sign-in page has **Start
   sessions read-only**, for password, client-certificate and browser (single sign-on) sign-in:

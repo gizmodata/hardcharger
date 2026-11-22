@@ -2154,11 +2154,31 @@ WHERE enabled AND has_sso_link AND has_password;
 ```
 
 The provider fields and `has_sso_link` are visible to the administrator and sessions acting as
-System Admin. Existing users start with NULL provider fields. On the first verified SSO
-sign-in that matches an enabled user's name, Hardcharger records the token's issuer and
-subject on that account. Later SSO sign-ins for that name must present the same pair.
-The existing password and grants continue to work. A read-only credential check leaves
-the link for the first actual sign-in. The first writable 2.14 server adds the columns
+System Admin. Existing users start with NULL provider fields. An SSO sign-in whose name (the
+token's `email`, else `sub`) matches an enabled, unlinked user signs in as that user, as in 2.13.
+Hardcharger records the token's issuer and subject on the account only when the provider vouches
+for the name: the `email` claim matched and the token says `email_verified: true` (or the string
+`"true"`), or the token has no `email` claim and its `sub` is exactly the user's name. Any other
+match, such as an unverified `email`, signs in and records nothing, so a later trustworthy sign-in
+can still link the account. Once linked, SSO sign-ins for that name must present the same pair.
+The existing password and grants continue to work. A read-only credential check leaves the link
+for the first actual sign-in. While the RBAC store is unreachable, nothing is recorded: an
+unlinked user signs in from the last snapshot and the link is recorded at a later sign-in, while a
+linked user is still held to its pair.
+
+Only the administrator, or a session acting as System Admin, links an account or changes its
+link (the `ALTER USER` privilege does not). To move a user to a new
+provider or subject (an identity-provider migration, a wrong first link), set the new pair: it
+replaces the old one, and is refused when another user already has that pair. To clear the link,
+so that the next trustworthy SSO sign-in records a pair again:
+
+```sql
+ALTER USER "pat@example.com" UNSET IDENTITY PROVIDER;
+```
+
+Each change is an `ALTER USER` record in the access-control audit chain (`SSO identity linked` or
+`SSO identity unlinked`) and reaches the other replicas like any other account change. Sessions
+the user already has are not ended: disable the user too if they should be. The first writable 2.14 server adds the columns
 in place to an existing DuckDB or PostgreSQL RBAC store. Run 2.14 on all replicas before relying on the links.
 Earlier DuckDB-store writers use positional inserts and cannot create users on the expanded schema.
 

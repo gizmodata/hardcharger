@@ -77,7 +77,7 @@ def test_upgrade_with_rbac_and_instrumentation(launcher, request, tmp_path, vers
     original_id, old_format = inspect_rbac(launcher, uri, [user_id, VERSION.format("meta")])
     assert old_format == [{"value": "1"}] and len(original_id) == 1
     env = idp_env(idp=idp, HARDCHARGER_TOKEN_AUTO_PROVISION_USERS=auto_provision)
-    token = idp["token"](email="reader", sub="reader-id", role="user")
+    token = idp["token"](email="reader", email_verified=True, sub="reader-id", role="user")
     sessions = []
     for startup in range(2):
         server = start_rbac_server(launcher=launcher, store_uri=uri, args=args, env=env)

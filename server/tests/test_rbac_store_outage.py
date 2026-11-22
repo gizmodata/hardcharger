@@ -24,6 +24,7 @@ import pytest
 
 from conftest import free_port
 from rbac import ChargewireError, start_rbac_server
+from test_rbac_token_provisioning import ISSUER, NO_MATCH, exchange, idp, idp_env, pair  # noqa: F401 - idp: a fixture
 
 pytestmark = pytest.mark.services
 
@@ -337,3 +338,45 @@ def test_a_store_that_does_not_answer_elevates_nobody(launcher, postgres):
     bob.run(sql="SET ROLE SYSTEM ADMIN")
     assert users(admin=admin) == {"alice", "bob", "made_after_the_outage"}
     assert postgres.password not in server.log()
+
+
+def test_a_first_sso_sign_in_during_an_outage_signs_in_and_records_nothing(launcher, postgres, idp):
+    """An unlinked user's first SSO sign-in records its identity, a store write: while the
+    store is unreachable it signs in from the snapshot as without a link (as 2.13 did) and
+    records nothing; a later sign-in records it. A linked user is still held to its pair."""
+    server = start_rbac_server(launcher=launcher, store_uri=postgres.uri,
+                               env={**idp_env(idp=idp), "HARDCHARGER_RBAC_STORE_TIMEOUT_SECONDS": "2"})
+    admin = server.admin()
+    admin.run(sql='CREATE USER "seen@example.com"')
+    admin.run(sql='CREATE USER "notyet@example.com"')
+    seen = idp["token"](email="seen@example.com", email_verified=True, sub="seen-001", role="user")
+    notyet = idp["token"](email="notyet@example.com", email_verified=True, sub="notyet-001", role="user")
+
+    def sign_in(token: str):
+        return exchange(server=server, subject_token=token).run(sql="SELECT 1 AS one").to_pylist()
+
+    assert sign_in(token=seen) == [{"one": 1}]  # the store is up: this records seen's pair
+    assert pair(admin=admin, name="seen@example.com") == {"idp_issuer": ISSUER, "idp_subject": "seen-001"}
+
+    postgres.stop()
+    outcome, _ = bounded(call=lambda: sign_in(token=notyet), seconds=30)
+    assert outcome is None, f"notyet's first SSO sign-in was refused during the outage: {outcome}"
+    assert sign_in(token=seen) == [{"one": 1}]
+    # Held to the recorded pair from the snapshot: another subject is refused.
+    for token in (idp["token"](email="seen@example.com", email_verified=True, sub="someone-else", role="user"),):
+        with pytest.raises(ChargewireError) as other:
+            exchange(server=server, subject_token=token)
+        assert other.value.code == "invalid_credentials" and NO_MATCH in other.value.detail, other.value
+    log = server.log()
+    assert "an SSO sign-in's identity was not recorded: the access control store is unavailable" in log, log
+    assert postgres.password not in log
+
+    postgres.start()
+    wait_for(condition=lambda: _runs(admin, "CREATE ROLE after_the_outage"), timeout=30,
+             what="the store to take writes again")
+    assert pair(admin=admin, name="notyet@example.com") == {"idp_issuer": None, "idp_subject": None}  # nothing recorded
+    assert sign_in(token=notyet) == [{"one": 1}]
+    assert pair(admin=admin, name="notyet@example.com") == {"idp_issuer": ISSUER, "idp_subject": "notyet-001"}
+    links = [r["user"] for r in server.running.log_records()
+             if r.get("message") == "linked an existing user on its first SSO sign-in"]
+    assert links == ["seen@example.com", "notyet@example.com"], links

@@ -1460,6 +1460,9 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
       if (c->action == Action::kLinkIdentity && !actor.is_unrestricted_administrator()) {
         return AccessControlError("only an unrestricted administrator can link an SSO identity");
       }
+      if (c->action == Action::kUnlinkIdentity && !actor.is_unrestricted_administrator()) {
+        return AccessControlError("only an unrestricted administrator can unlink an SSO identity");
+      }
       const bool attribute = c->action == Action::kSetAttribute || c->action == Action::kUnsetAttribute;
       if (authority.delegated()) {
         ARROW_RETURN_NOT_OK(RefuseAdministratorAccount(account_name, "ALTER USER", options_));
@@ -1540,16 +1543,28 @@ arrow::Result<CommandResult> RbacEngine::Execute(const RbacCommand& command, con
           message = "User " + user.name + " disabled";
           break;
         case Action::kLinkIdentity: {
+          // Records the pair, or replaces another one (an identity-provider migration, a wrong
+          // first match): the administrator's way out of a link that no longer signs in.
           const ProviderIdentity identity{c->issuer, c->subject};
-          if (user.sso_identity && *user.sso_identity != identity)
-            return AccessControlError("user already has another SSO identity");
           if (const auto* linked = snap.FindUserByIdentity(identity); linked && linked->id != user.id) {
             return AccessControlError("the SSO identity is already linked to another user");
           }
-          message = "SSO identity linked to user " + user.name;
-          if (user.sso_identity) return arrow::Status::OK();
+          if (user.sso_identity && *user.sso_identity == identity) {
+            message = "SSO identity linked to user " + user.name;
+            return arrow::Status::OK();
+          }
+          message = std::string(user.sso_identity ? "SSO identity replaced for user " : "SSO identity linked to user ") +
+                    user.name;
           return txn.LinkIdentity(user.id, identity);
         }
+        case Action::kUnlinkIdentity:
+          if (!user.sso_identity) {
+            message = "User " + user.name + " has no SSO identity";
+            return arrow::Status::OK();
+          }
+          // Its next trustworthy SSO sign-in records a pair again.
+          message = "SSO identity unlinked from user " + user.name;
+          return txn.UnlinkIdentity(user.id);
         case Action::kSetAttribute:
           message = "Attribute " + c->attribute + " set for user " + user.name;
           return txn.SetUserAttribute(user.id, c->attribute, c->value);

@@ -349,11 +349,25 @@ chargewire::Principal Authenticator::ExchangeToken(std::string_view subject_toke
   if (access_ && principal.role != "admin") {
     const std::string issuer = decoded.has_issuer() ? decoded.get_issuer() : std::string();
     const std::string subject = decoded.has_subject() ? decoded.get_subject() : std::string();
+    // Whether the provider vouches for the name: a first match records the token's identity
+    // on the user only then. `email_verified` is a boolean, or the string "true" from
+    // providers that send claims as strings.
+    using TokenName = authz::AccessControl::TokenName;
+    TokenName name_source = TokenName::kSubject;
+    if (decoded.has_payload_claim("email")) {
+      name_source = TokenName::kUnverifiedEmail;
+      if (decoded.has_payload_claim("email_verified")) {
+        const auto verified = decoded.get_payload_claim("email_verified").to_json();
+        if ((verified.is_bool() && verified.as_bool()) || (verified.is_string() && verified.as_string() == "true")) {
+          name_source = TokenName::kVerifiedEmail;
+        }
+      }
+    }
     authz::AccessControl::TokenUser user;
     if (auto_provision_users_ && issuer == auto_provision_issuer_) {
-      user = access_->ProvisionStoreUser(principal.name, principal.role, issuer, subject);
+      user = access_->ProvisionStoreUser(principal.name, principal.role, issuer, subject, name_source);
     } else {
-      user = access_->RequireStoreUser(principal.name, issuer, subject);
+      user = access_->RequireStoreUser(principal.name, issuer, subject, name_source);
     }
     // A user provisioned from a readonly token stays readonly, whatever later tokens say,
     // until an administrator removes its provisioned_role attribute.
