@@ -154,7 +154,8 @@ pub fn step<R: Runtime>(app: &AppHandle<R>, step: Step) {
 
 /// What a key press with ⌘ means for zoom, by the character it types (layout-aware, Shift
 /// included, as AppKit reports `charactersIgnoringModifiers`) or the keypad key it is.
-pub fn shortcut(
+#[cfg(any(target_os = "macos", test))]
+fn shortcut(
     characters: &str,
     key_code: u16,
     command: bool,
