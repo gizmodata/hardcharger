@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from conftest import CLIENT_BINARY, clean_environment
+from conftest import CLIENT_BINARY, clean_environment, protected_system_file
 from rbac import ChargewireError, Client, expect_allowed, expect_blocked, mint, start_rbac_server
 
 ELEVATE = "SET ROLE SYSTEM ADMIN"
@@ -584,8 +584,9 @@ def test_the_administrator_is_out_of_a_system_admins_reach(world):
         refused(client=alice, sql=sql, why=why)
     # Its credentials are the server's configuration, which no SQL reads, a System Admin's
     # (as the administrator's own) included.
-    expect_blocked(client=alice, sql="SELECT * FROM read_text('/proc/self/environ')",
-                   why="Hardcharger blocked access to '/proc/self/environ'")
+    protected_path = protected_system_file(posix="/proc/self/environ")
+    expect_blocked(client=alice, sql=f"SELECT * FROM read_text('{protected_path}')",
+                   why="Hardcharger blocked access to")
     assert error_of(client=alice, sql="SELECT getenv('HARDCHARGER_ADMIN_PASSWORD')") != ""
     # (The password policy's settings name passwords but hold numbers.)
     policy = ("hardcharger.password_min_length", "hardcharger.password_min_character_classes",
