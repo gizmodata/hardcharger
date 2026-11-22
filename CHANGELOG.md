@@ -7,11 +7,7 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
-### Fixed
-
-- Android release UI checks recover from temporary emulator ADB disconnects during setup and evidence collection.
-
-## [2.14.0] - 2026-11-21
+## [2.14.0] - 2026-11-22
 
 ### Added
 
@@ -181,8 +177,9 @@ own changelog in `python/CHANGELOG.md`.
 ### Changed
 
 - CI checks Clang thread-safety annotations, treats native compiler warnings as errors and
-  checks formatting on changed C/C++ lines. Linux Arm runs UBSan alongside ASan. Manual CI
-  can target a single build leg while release tags still require the full matrix.
+  checks formatting on changed C/C++ lines. Linux ARM64 runs Clang 18’s address and undefined-behavior
+  sanitizers with stack-use-after-return detection enabled. Manual CI can target a single
+  build leg while release tags still require the full matrix.
 
 - Linux server and CLI binaries use PIE, full RELRO and stack protection. The CLI reports a failure to change to the home directory when running `.cd`.
 
@@ -218,6 +215,8 @@ own changelog in `python/CHANGELOG.md`.
   protects is read, as a direct `current_role()` call always was.
 
 ### Fixed
+
+- Android release UI checks recover from temporary emulator ADB disconnects during setup and evidence collection.
 
 - Align statement logging examples and integration coverage with masking for columns named `token`.
 - Verify that query detail windows preserve ordinary comments and copy credential comments with values masked.

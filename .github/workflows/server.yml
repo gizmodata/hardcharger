@@ -1121,12 +1121,14 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build libssl-dev flex bison
+          sudo apt-get install -y --no-install-recommends clang-18 libclang-rt-18-dev ninja-build libssl-dev flex bison
       # The dependencies, uninstrumented (only the server is built with the sanitizers), each
       # cached on its own (platform linux-arm64-ubuntu: the runner's compiler, not manylinux's).
       - name: Toolchain
         id: toolchain
-        run: echo "toolchain=$(c++ --version | head -1)" | tee -a "$GITHUB_OUTPUT"
+        run: |
+          echo "toolchain=$(c++ --version | head -1)" >> "$GITHUB_OUTPUT"
+          echo "sanitizer_toolchain=$(clang++-18 --version | head -1)" >> "$GITHUB_OUTPUT"
       - name: Arrow (cached)
         uses: ./.github/actions/dep-cache
         with:
@@ -1154,16 +1156,21 @@ jobs:
         with:
           mode: restore
           name: linux-arm64-asan
-          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          toolchain: ${{ steps.toolchain.outputs.sanitizer_toolchain }}
       # UBSan: every check but vptr (DuckDB is an uninstrumented shared library here, and
       # its classes' type information crosses into the server: vptr reports there are about
       # that, not about undefined behaviour); the first report aborts.
+      # Ubuntu's ARM64 libasan spends most of the SQL lexer benchmark allocating fake
+      # stack frames. Clang's runtime checks stack use after return within the test budget.
       - name: Build the server with AddressSanitizer and UndefinedBehaviorSanitizer
+        env:
+          CC: clang-18
+          CXX: clang++-18
         run: |
           read -ra launcher <<< "$(server/scripts/sccache-launcher.sh || true)"
           sanitize="-fsanitize=address,undefined -fno-sanitize=vptr -fno-sanitize-recover=undefined"
           cmake -S server -B server/build-asan -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
+            -DCMAKE_CXX_SCAN_FOR_MODULES=OFF -DHARDCHARGER_WEB_UI="$HARDCHARGER_UI_TARBALL" \
             "${launcher[@]}" \
             -DCMAKE_CXX_FLAGS="$sanitize -fno-omit-frame-pointer" \
             -DCMAKE_EXE_LINKER_FLAGS="$sanitize"
@@ -1174,7 +1181,7 @@ jobs:
         with:
           mode: save
           name: linux-arm64-asan
-          toolchain: ${{ steps.toolchain.outputs.toolchain }}
+          toolchain: ${{ steps.toolchain.outputs.sanitizer_toolchain }}
       - name: Start PostgreSQL
         run: |
           docker run -d --name hardcharger-test-pg -e POSTGRES_USER=hardcharger \
@@ -1187,7 +1194,7 @@ jobs:
       - name: Hardcharger tests (ASan, UBSan)
         working-directory: server/tests
         env:
-          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           HARDCHARGER_TEST_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           HARDCHARGER_TEST_UNIT_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-unit-tests
@@ -1203,7 +1210,7 @@ jobs:
       - name: Chargewire conformance suite (ASan, UBSan)
         working-directory: third_party/chargewire/conformance
         env:
-          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1:detect_stack_use_after_return=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           CHARGEWIRE_TEST_SERVER_BINARY: ${{ github.workspace }}/server/build-asan/hardcharger-server
           # Hardcharger has read-only sessions (Chargewire §5.8): without the capability the read-only
