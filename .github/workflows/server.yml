@@ -1473,7 +1473,7 @@ jobs:
   # already passed (changes.outputs.tested), it takes that run's Linux tarballs: the
   # binaries that were tested, not a rebuild.
   image:
-    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android]
+    needs: [changes, build, performance, portable, sanitize, tsan, ui-checks, ui-e2e, windows, verify-macos, verify-windows, ios, ios-archive, android, desktop, checksums]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.run_rest == 'true'
           && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
@@ -1485,7 +1485,8 @@ jobs:
                   && needs.windows.result == 'success'
                   && needs.verify-macos.result == 'success' && needs.verify-windows.result == 'success'
                   && needs.ios.result == 'success' && needs.ios-archive.result == 'success'
-                  && needs.android.result == 'success')) }}
+                  && needs.android.result == 'success'
+                  && needs.desktop.result == 'success' && needs.checksums.result == 'success')) }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1704,10 +1705,9 @@ jobs:
           if-no-files-found: ignore
 
   # The signed device build, on a v* tag only, after the simulator tests passed: an App
-  # Store-signed .ipa as this run's artifact. Nothing is uploaded to App Store Connect or
-  # TestFlight (Philip decides; the App Store Connect key in `production` is for that later,
-  # uploaded to TestFlight). Manual signing with the distribution certificate and the "Hardcharger App
-  # Store" profile, in a keychain of the run's own that is deleted afterwards.
+  # Store-signed .ipa as this run's artifact; ios-testflight uploads it once the release is out.
+  # Manual signing with the distribution certificate and the "Hardcharger App Store" profile, in
+  # a keychain of the run's own that is deleted afterwards.
   ios-archive:
     name: iOS app (signed device build)
     needs: [changes, web-ui, ios, performance]
@@ -1750,28 +1750,6 @@ jobs:
           name: hardcharger-ios-ipa
           path: ${{ runner.temp }}/ios-export/*.ipa
           if-no-files-found: error
-      # TestFlight, on release tags (Philip, 2026-10-20: "add the upload step to CI - we do that in
-      # GizmoSQL"). The App Store Connect API key lives only for this step; the build number is the
-      # run number, so every upload of a version is a new build. A failed upload fails the gate
-      # (the .ipa is already the run's artifact, so it can be uploaded by hand).
-      - name: Upload to TestFlight
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          ASC_KEY_B64: ${{ secrets.ASC_KEY_B64 }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-        run: |
-          set -euo pipefail
-          [ -n "$ASC_KEY_B64" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] || { echo "::error::ASC_KEY_B64 / ASC_KEY_ID / ASC_ISSUER_ID are not all set"; exit 1; }
-          mkdir -p "$HOME/.appstoreconnect/private_keys"
-          printf '%s' "$ASC_KEY_B64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-          shopt -s nullglob
-          ipas=("$RUNNER_TEMP"/ios-export/*.ipa)
-          [ "${#ipas[@]}" -eq 1 ] || { echo "::error::expected exactly one exported .ipa"; exit 1; }
-          xcrun altool --upload-app -f "${ipas[0]}" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
-      - name: Remove the App Store Connect key
-        if: always()
-        run: rm -rf "$HOME/.appstoreconnect"
 
   verify-macos:
     name: verify signatures (macos-arm64)
@@ -2035,6 +2013,42 @@ jobs:
         env:
           GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: python3 android/scripts/play-internal.py candidate
+
+  # TestFlight, after the release (Philip, 2026-10-20: "add the upload step to CI - we do that in
+  # GizmoSQL"): the signed .ipa ios-archive built, only once every gate passed and the GitHub
+  # Release exists, as android-play. A tag moved after a failed gate leaves nothing behind. The
+  # App Store Connect API key lives only for this job; the build number is the run number, so
+  # every upload of a version is a new build. A failed upload fails the run (the .ipa is the
+  # run's artifact, so it can be uploaded by hand).
+  ios-testflight:
+    name: iOS app (TestFlight upload)
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success'
+    runs-on: xcode-27  # xcrun altool; the image that built the .ipa
+    environment: production
+    timeout-minutes: 60
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: hardcharger-ios-ipa
+          path: ios-export
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_B64: ${{ secrets.ASC_KEY_B64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          [ -n "$ASC_KEY_B64" ] && [ -n "$ASC_KEY_ID" ] && [ -n "$ASC_ISSUER_ID" ] || { echo "::error::ASC_KEY_B64 / ASC_KEY_ID / ASC_ISSUER_ID are not all set"; exit 1; }
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s' "$ASC_KEY_B64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+          shopt -s nullglob
+          ipas=(ios-export/*.ipa)
+          [ "${#ipas[@]}" -eq 1 ] || { echo "::error::expected exactly one exported .ipa"; exit 1; }
+          xcrun altool --upload-app -f "${ipas[0]}" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+      - name: Remove the App Store Connect key
+        if: always()
+        run: rm -rf "$HOME/.appstoreconnect"
 
   # What follows a published release: the matching `hardcharger` Python package (workflow.yml),
   # the bundled-driver images :X.Y.Z-adbc (adbc-images.yml) and, for a release that is not a
