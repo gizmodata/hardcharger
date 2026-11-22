@@ -17,8 +17,8 @@
   <a href="https://github.com/gizmodata/hardcharger/pkgs/container/hardcharger"><img src="https://img.shields.io/badge/github--package-container--image-green.svg?logo=Docker" alt="GitHub container image"></a>
   <a href="https://github.com/gizmodata/hardcharger/releases/latest"><img src="https://img.shields.io/badge/release-binaries-orange.svg?logo=GitHub" alt="Release binaries"></a>
   <a href="https://github.com/gizmodata/chargewire"><img src="https://img.shields.io/badge/protocol-Chargewire-31a8db.svg" alt="Chargewire protocol"></a>
-  <a href="https://github.com/gizmodata/hardcharger-engine"><img src="https://img.shields.io/badge/engine-Hardcharger%20Engine%202.0.1-fff000.svg" alt="Hardcharger Engine 2.0.1"></a>
-  <a href="https://duckdb.org"><img src="https://img.shields.io/badge/fork%20of-DuckDB%202.0.1-fff000.svg?logo=duckdb&logoColor=black" alt="A fork of DuckDB 2.0.1"></a>
+  <a href="https://github.com/gizmodata/hardcharger-engine"><img src="https://img.shields.io/badge/engine-Hardcharger%20Engine%202.0-fff000.svg" alt="Hardcharger Engine 2.0"></a>
+  <a href="https://duckdb.org"><img src="https://img.shields.io/badge/fork%20of-DuckDB%202.0-fff000.svg?logo=duckdb&logoColor=black" alt="A fork of DuckDB 2.0"></a>
   <a href="https://arrow.apache.org"><img src="https://img.shields.io/badge/wire%20format-Apache%20Arrow-f15a24.svg" alt="Apache Arrow"></a>
   <br>
   <a href="https://pypi.org/project/adbc-driver-hardcharger/"><img src="https://img.shields.io/badge/PyPI%20client-adbc--driver--hardcharger-blue.svg?logo=PyPI" alt="PyPI: adbc-driver-hardcharger (client)"></a>
@@ -52,8 +52,8 @@
 
 ## 🏎️ What is Hardcharger?
 
-**Hardcharger™** puts [Hardcharger Engine 2.0.1](https://github.com/gizmodata/hardcharger-engine),
-GizmoData's performance fork of [DuckDB 2.0.1](https://duckdb.org), on the network. Clients
+**Hardcharger™** puts [Hardcharger Engine 2.0](https://github.com/gizmodata/hardcharger-engine),
+GizmoData's performance fork of [DuckDB 2.0](https://duckdb.org), on the network. Clients
 connect over [**Chargewire**](https://github.com/gizmodata/chargewire), an open HTTP protocol
 that moves [Apache Arrow](https://arrow.apache.org) record batches straight from the engine to
 your application: no gRPC, no Flight, no sidecars.
@@ -63,8 +63,8 @@ scratch for DuckDB 2.0, and it is free: no editions, no license keys. Everything
 Enterprise in GizmoSQL is in every Hardcharger build.
 
 - 🦆 **Hardcharger Engine inside.** A standalone server on the v2 C API of
-  [Hardcharger Engine 2.0.1](https://github.com/gizmodata/hardcharger-engine), not an extension. The
-  engine is [DuckDB 2.0.1](https://duckdb.org), the DuckDB team's work, with targeted
+  [Hardcharger Engine 2.0](https://github.com/gizmodata/hardcharger-engine), not an extension. The
+  engine is [DuckDB 2.0](https://duckdb.org), the DuckDB team's work, with targeted
   performance changes from GizmoData on top: join planning for OR conditions under `DISTINCT`
   and for timestamp-to-date keys, integer range filters, filtered scans, read-ahead, substring
   search and regex extraction
@@ -216,7 +216,7 @@ The UI's source is in [`ui/`](ui/README.md), built and tested with the server in
 </p>
 
 The whole server runs on the iPhone or iPad itself: the same `hardcharger-server`, Hardcharger
-Engine 2.0.1 and its built-in extensions, built into the app. The app shows:
+Engine 2.0 and its built-in extensions, built into the app. The app shows:
 
 - 🖥️ **Web UI**: the server's own web UI (editor, results grid, schema browser, sessions, API
   page, uploads), signed in by the app; or a saved remote server's.
@@ -276,7 +276,7 @@ unless a queue is full.
 
 ```mermaid
 flowchart LR
-  D[(Hardcharger Engine 2.0.1<br/>parallel execution)] --> P[Produce<br/>Arrow batches,<br/>122,880 rows each]
+  D[(Hardcharger Engine 2.0<br/>parallel execution)] --> P[Produce<br/>Arrow batches,<br/>122,880 rows each]
   P --> Z[Compress<br/>lz4_frame or zstd,<br/>worker pool, when asked for]
   Z --> T[Encrypt and send<br/>TLS in 1 MiB writes,<br/>overlapped with the next]
   T --> C1[connection 1]
@@ -675,7 +675,7 @@ maps its options and lists what changed.
 
 | | |
 |---|---|
-| 🦆 [Hardcharger Engine 2.0.1](https://github.com/gizmodata/hardcharger-engine) (GizmoData's fork of DuckDB 2.0.1), DuckLake and DuckDB's extensions | ✅ |
+| 🦆 [Hardcharger Engine 2.0](https://github.com/gizmodata/hardcharger-engine) (GizmoData's fork of DuckDB 2.0), DuckLake and DuckDB's extensions | ✅ |
 | 🖥️ Built-in web UI: SQL editor, results grid, schema browser, exports (`--web-ui`) | ✅ |
 | 📱 iPhone and iPad app: the server on the device, its web UI and a SQL console | ✅ |
 | ⚡ Chargewire: streamed and resumable results, bind parameters, prepared statements, bulk ingest, lz4_frame and zstd | ✅ |
