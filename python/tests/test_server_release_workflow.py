@@ -86,7 +86,7 @@ def workflow_jobs() -> dict[str, str]:
     """Each job's text, by its id."""
     jobs = WORKFLOW.read_text(encoding="utf-8").split("\njobs:\n", maxsplit=1)[1]
     parts = re.split(pattern=r"(?m)^  ([A-Za-z_][\w-]*):\n", string=jobs)
-    return dict(zip(parts[1::2], parts[2::2]))
+    return dict(zip(parts[1::2], parts[2::2], strict=True))
 
 
 def job_key(job: str, key: str) -> str | None:
@@ -98,8 +98,10 @@ def job_key(job: str, key: str) -> str | None:
 def test_publish_needs_every_gate_and_never_overrides_their_outcome():
     assert job_key(job="publish", key="needs") == "[test, server, client]"
     condition = job_key(job="publish", key="if")
-    # With no status function, GitHub implies success(): a failed or skipped need skips the publish.
-    assert condition is not None and not any(function in condition for function in STATUS_FUNCTIONS), condition
+    # With no status function, GitHub implies success(): a failed or skipped need skips the
+    # publish.
+    assert condition is not None, condition
+    assert not any(function in condition for function in STATUS_FUNCTIONS), condition
     assert job_key(job="github-release", key="needs") == "publish"
     assert job_key(job="github-release", key="if") is None
     for job in ("test", "server", "client", "publish"):
@@ -109,7 +111,8 @@ def test_publish_needs_every_gate_and_never_overrides_their_outcome():
 def test_the_server_tests_are_skipped_only_when_the_policy_says_the_release_is_not_there():
     assert job_key(job="server", key="needs") == "test"
     assert job_key(job="server", key="if") == "needs.test.outputs.server_available == 'true'"
-    assert "server_available: ${{ steps.server-release.outputs.available }}" in workflow_jobs()["test"]
+    output = "server_available: ${{ steps.server-release.outputs.available }}"
+    assert output in workflow_jobs()["test"]
 
 
 def test_every_publishing_trigger_requires_the_server_release():
