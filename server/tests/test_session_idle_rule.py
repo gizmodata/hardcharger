@@ -10,7 +10,10 @@ session answers 404 session_not_found.
 Each session here is probed once, at the moment the test is about: every request is
 activity that restarts its idle clock."""
 
+import socket
+import struct
 import time
+import urllib.parse
 
 import httpx
 import pytest
@@ -66,6 +69,29 @@ def test_a_running_statement_keeps_the_session_only_while_a_request_waits_on_it(
             code="session_not_found")
     watcher = server.admin()
     assert watcher.scalar(sql=f"SELECT count(*) FROM hardcharger_active_connections() WHERE session_id = '{gone.id}'") == 0
+
+
+def test_a_request_queued_behind_a_running_statement_keeps_nothing_once_its_client_is_gone(server):
+    # A metadata request waits for the session's engine, which the running statement holds.
+    # Its client resets the connection while it waits: the session is as unattended as one
+    # whose client never asked again, and goes at the first sweep after its timeout (the
+    # 2.14.0 candidate kept it, and the statement's transaction, for as long as it ran).
+    session = server.admin()
+    response = session.submit(sql="SELECT sleep_ms(30000) AS slept",
+                              headers={"Prefer": "respond-async", "Chargewire-Retain-Result": "false"})
+    assert response.status_code in (200, 201, 202), response.text
+    base = urllib.parse.urlsplit(server.base_url)
+    queued = socket.create_connection(address=(base.hostname, base.port))
+    headers = "".join(f"{name}: {value}\r\n" for name, value in session.headers().items())
+    queued.sendall(f"GET {session.url}/metadata/tables HTTP/1.1\r\nHost: {base.netloc}\r\n{headers}\r\n".encode())
+    time.sleep(0.5)
+    queued.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))  # a reset, not a close
+    queued.close()
+    started = time.monotonic()
+    time.sleep(IDLE + SWEEP + SLACK)
+    assert time.monotonic() - started < 25, "the check must come well before the statement ends"
+    problem(response=session.http.get(url=session.url, headers=session.headers()), status=404,
+            code="session_not_found")
 
 
 def test_a_retained_result_keeps_the_session_until_it_expires(server):

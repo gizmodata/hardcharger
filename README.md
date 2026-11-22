@@ -1384,7 +1384,10 @@ A session is evicted within 5 s (the server's sweep interval) after `session_idl
 seconds (default 900; 0 never evicts) without a request on it, unless a request is waiting
 on one of its statements (`Prefer: wait`), one of its ingests is in progress, one of its
 results is being read (a slow download keeps it to the end of the stream), or it holds a
-retained result that hasn't expired. A statement that is still running with no request
+retained result that hasn't expired. The timeout counts from the end of the session's last
+response, so a client that polls with `Prefer: wait` longer than the timeout keeps its
+session. A request queued behind a statement that is still running (metadata, a commit, a
+prepare) does not keep the session while it waits for its turn. A statement that is still running with no request
 waiting on it does not keep the session: a client that is there polls its statement and is
 heard from within the timeout, while one that died mid-write (a pod killed at its deadline)
 must not keep the session, and the write's open transaction, alive for the hours the write

@@ -290,7 +290,7 @@ const std::vector<Option>& Options() {
       {"max_sessions", Kind::kInt,
        "most non-admin sessions at once (0: unlimited)", NUMBER(max_sessions)},
       {"session_idle_timeout", Kind::kInt,
-       "a session is evicted within 5 s after this many seconds without requests (0: never), "
+       "a session is evicted within 5 s after this many seconds since its last response ended (0: never), "
        "unless an ingest of it is in progress, a result of it is being read, a request is "
        "waiting on a statement of it, or it holds a retained result that hasn't expired "
        "(result_retention_seconds); a statement still running is then cancelled and its "
