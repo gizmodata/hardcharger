@@ -54,13 +54,16 @@ def test_no_estimate_before_progress_bar_time_and_a_long_statement_gets_one(laun
         while not late:
             doc = session.status(statement_id=statement_id)
             answered = time.monotonic() - began
+            assert time.monotonic() < deadline, (early, doc)
+            if doc["state"] == "queued":
+                time.sleep(0.05)
+                continue
             assert doc["state"] == "running", doc
             fraction = doc.get("progress", {}).get("fraction")
             if answered < delay:
                 early.append(fraction)
-            elif fraction is not None:
+            elif fraction not in (None, 0):
                 late.append(fraction)
-            assert time.monotonic() < deadline, (early, doc)
             time.sleep(0.05)
     finally:
         cancel = session.http.post(url=f"{session.url}/statements/{statement_id}/cancel", headers=session.headers())
