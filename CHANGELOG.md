@@ -222,8 +222,9 @@ own changelog in `python/CHANGELOG.md`.
 - SQL log redaction no longer crashes on one-token statements such as `BEGIN`, `COMMIT`, or `ROLLBACK`.
 - Read-only connections enforce sequence and table-function restrictions when DuckDB binds views and macros.
 - A blocked macro replacement reports catalog dependencies and names only objects the caller can see.
+- The iOS SQL console hint wraps at larger Dynamic Type sizes, and the LAN sharing sheet exposes its Done button.
 
-- Web UI connection notices no longer move the server tree under the pointer. The iOS SQL console welcome text wraps to its full height.
+- Web UI connection notices no longer move the server tree under the pointer.
 - **Android console: result tables line up**
   ([#57](https://github.com/gizmodata/hardcharger/issues/57)). A table's borders ran past its
   rows: Android's monospace font has no box-drawing characters, so they came from a wider

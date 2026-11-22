@@ -50,6 +50,23 @@ final class HardchargerUITests: XCTestCase {
         button.tap()
     }
 
+    private func openEditorKeyboard(in web: XCUIElement, editor: XCUIElement) {
+        // The editor's accessibility text view is Monaco's hidden input, not the visible
+        // editor. On short layouts its frame plus a fixed offset lands below the pane.
+        let divider = web.descendants(matching: .any)["Resize the SQL editor"].firstMatch
+        XCTAssertTrue(divider.waitForExistence(timeout: 10), "the editor's resize handle is visible")
+        let keyboard = app.keyboards.firstMatch
+        let frame = editor.frame
+        let bottom = divider.frame.minY - 24
+        // Try just past the text, then the blank area above the divider. WebKit can move
+        // the caret on the first tap while it is still establishing its input session.
+        for y in [min(frame.minY + 48, bottom), bottom] {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: y)).tap()
+            if keyboard.waitForExistence(timeout: 5) { return }
+        }
+        XCTFail("the keyboard opens for the editor")
+    }
+
     func testSplashThenWebUIRunsSelect42() throws {
         app.launchArguments = ["-HCResetState", "YES", "-HCPort", "0", "-HCSplashMinimum", "10", "-HCInitialTab", "web"]
         app.launch()
@@ -68,15 +85,16 @@ final class HardchargerUITests: XCTestCase {
         XCTAssertTrue(run.waitForExistence(timeout: webUILoads), "the web UI opens signed in")
         XCTAssertFalse(web.secureTextFields.firstMatch.exists, "no password form")
 
-        // Replace the editor's text with SELECT 42 and run it. (Monaco's own input is a
-        // hidden textarea; a tap on its visible line focuses it.)
+        // Run the supplied query first. The initial autofocus can leave iOS 27 WebKit's
+        // input focused without displaying the software keyboard until the page is used.
+        run.tap()
+        XCTAssertTrue(web.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'version'")).firstMatch
+            .waitForExistence(timeout: 30), "the supplied query runs")
+
+        // Enter SELECT 42 on the empty last line. Run executes the statement at the caret.
         let editor = web.textViews["SQL editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 10))
-        // A tap below the text puts the cursor on the empty last line and opens the keyboard
-        // (WebConsole.editorFocusScript); Run runs the statement at the cursor.
-        let frame = editor.frame
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + 120)).tap()
-        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "the keyboard opens for the editor")
+        openEditorKeyboard(in: web, editor: editor)
         // The trailing space closes the completion list ("answer" offers tpch_answers): while
         // it is open the editor's accessibility value doesn't show the line, and 2.7.0's gate
         // failed with the text on screen. The rendered word counts as proof too.
@@ -144,8 +162,7 @@ final class HardchargerUITests: XCTestCase {
         XCTAssertTrue(web.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH 'version'")).firstMatch
             .waitForExistence(timeout: 30))
         if !app.keyboards.firstMatch.waitForExistence(timeout: 5) {
-            let frame = editor.frame
-            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + 120)).tap()
+            openEditorKeyboard(in: web, editor: editor)
         }
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "a keyboard is up")
         let hide = app.buttons["webui.hideKeyboard"].firstMatch
@@ -398,7 +415,9 @@ final class HardchargerUITests: XCTestCase {
         XCTAssertTrue(pin.matched, "with the certificate the app shows")
 
         // This device's own web UI and console, now over TLS with the same certificate.
-        app.buttons["Done"].firstMatch.tap()
+        let done = app.buttons["share.done"].firstMatch
+        XCTAssertTrue(done.waitForExistence(timeout: 10), "the share sheet can be closed")
+        done.tap()
         open("Web UI")
         XCTAssertTrue(app.webViews.firstMatch.buttons["Run"].waitForExistence(timeout: webUILoads), "the web UI over TLS")
         open("Console")

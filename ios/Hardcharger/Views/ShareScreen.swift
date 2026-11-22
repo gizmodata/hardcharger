@@ -37,8 +37,9 @@ struct ShareScreen: View {
         .navigationTitle("Share on Local Network")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("Done") { dismiss() }
+                    .accessibilityIdentifier("share.done")
             }
         }
         .confirmationDialog("Share this database on your network?", isPresented: $confirmOn, titleVisibility: .visible) {

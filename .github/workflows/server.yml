@@ -1664,14 +1664,17 @@ jobs:
       - name: Unit and UI tests
         run: |
           ios/scripts/generate-project.sh
+          # The hosted image also includes an iPhone Duo runtime. Use Apple's standard
+          # iPhone 18 Pro simulator so these tests cover the same device locally and in CI.
           device=$(xcrun simctl list devices available -j | python3 -c '
           import json, sys
           for runtime, devices in sorted(json.load(sys.stdin)["devices"].items(), reverse=True):
               if "iOS" in runtime:
                   for d in devices:
-                      if d["name"].startswith("iPhone"):
+                      if d["name"] == "iPhone 18 Pro":
                           print(d["udid"]); sys.exit()')
-          [ -n "$device" ] || { echo "no iPhone simulator"; exit 1; }
+          [ -n "$device" ] || { echo "::error::No available iPhone 18 Pro simulator"; exit 1; }
+          echo "Running iOS tests on iPhone 18 Pro ($device)"
           # The keyboard's first-run "slide to type" introduction is modal system UI: on a
           # fresh simulator it covered the app during 2.7.0's gate, so typing landed late and
           # the web view showed no content to the tests. Mark it as seen before the tests.

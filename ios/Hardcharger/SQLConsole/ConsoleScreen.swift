@@ -77,6 +77,7 @@ struct SQLConsoleScreen: View {
                     .consoleRow()
                 }
                 Color.clear.frame(height: 1).id("end").consoleRow()
+                    .accessibilityHidden(true)
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
@@ -103,6 +104,7 @@ struct SQLConsoleScreen: View {
                 Button("Try Again") { Task { await connect(force: true) } }
             } else if console.isConnected {
                 Text("Statements end with ';'. Type .help for the dot commands, ⌘↩ to run as written.")
+                    .font(.footnote.monospaced())
                     .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(.secondary)
             } else if scene.sqlTarget == .local, server.phase != .running {
