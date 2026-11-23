@@ -351,7 +351,7 @@ jobs:
       - name: No version labels in the docs
         working-directory: .
         run: python3 .github/scripts/check_no_version_labels.py
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Install
         run: |
           uv venv .venv --python 3.14
@@ -651,7 +651,7 @@ jobs:
           "$pg/pg_ctl" -D "$RUNNER_TEMP/pg" -o "-p 55433 -k $RUNNER_TEMP" -l "$RUNNER_TEMP/pg.log" -w start
           PGPASSWORD=hardcharger "$pg/createdb" -h 127.0.0.1 -p 55433 -U hardcharger hardcharger
 
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       # PostgreSQL and an S3 gateway for the DuckLake suites (Docker runs on the Linux
       # runners only; the macOS job deselects those suites by marker, visibly).
       - name: Test services
@@ -1230,7 +1230,7 @@ jobs:
             -e POSTGRES_PASSWORD=hardcharger -e POSTGRES_DB=hardcharger \
             -p 127.0.0.1:55433:5432 postgres:17-alpine
           for _ in $(seq 1 30); do docker exec hardcharger-test-pg pg_isready -U hardcharger && break; sleep 1; done
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Test services
         run: docker compose -f server/tests/docker-compose.yml up -d --wait
       - name: Hardcharger tests (ASan, UBSan)
@@ -1438,7 +1438,7 @@ jobs:
             -e POSTGRES_PASSWORD=hardcharger -e POSTGRES_DB=hardcharger \
             -p 127.0.0.1:55433:5432 postgres:17-alpine
           for _ in $(seq 1 30); do docker exec hardcharger-test-pg pg_isready -U hardcharger && break; sleep 1; done
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Test services
         run: docker compose -f server/tests/docker-compose.yml up -d --wait
       # exitcode=66 marks a process that printed an unsuppressed report; halt_on_error=0

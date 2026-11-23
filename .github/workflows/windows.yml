@@ -338,7 +338,7 @@ jobs:
 
       # Its cache key from the two test projects only: scanning the whole workspace for
       # lock files once failed on a file in a build tree (EPERM).
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: astral-sh/setup-uv@v10.3.3
         if: ${{ !cancelled() && steps.server.outcome == 'success' }}
         with:
           cache-dependency-glob: |
