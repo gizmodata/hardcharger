@@ -560,3 +560,10 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "store" in getattr(item, "fixturenames", ()):
             item.add_marker(pytest.mark.rbac_store)
+    # The Sirius suite runs against a server someone started with the extension loaded (a GPU node):
+    # deselected, visibly, unless HARDCHARGER_TEST_SIRIUS_URL names one.
+    if not os.environ.get("HARDCHARGER_TEST_SIRIUS_URL"):
+        sirius = [item for item in items if item.get_closest_marker("sirius")]
+        if sirius:
+            config.hook.pytest_deselected(items=sirius)
+            items[:] = [item for item in items if not item.get_closest_marker("sirius")]

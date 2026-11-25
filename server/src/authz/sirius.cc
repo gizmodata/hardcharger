@@ -2,14 +2,21 @@
 
 #include <duckdb.hpp>
 #include <duckdb/common/error_data.hpp>
+#include <duckdb/common/multi_file/multi_file_list.hpp>
+#include <duckdb/common/multi_file/multi_file_states.hpp>
 #include <duckdb/common/string_util.hpp>
 #include <duckdb/common/virtual_file_system.hpp>
 #include <duckdb/main/capi_v2/capi_v2_internal.hpp>
+#include <duckdb/main/client_context.hpp>
+#include <duckdb/main/client_context_state.hpp>
 #include <duckdb/main/config.hpp>
 #include <duckdb/main/database.hpp>
+#include <duckdb/optimizer/optimizer_extension.hpp>
 #include <duckdb/planner/extension_callback.hpp>
+#include <duckdb/planner/operator/logical_get.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 #include <set>
 #include <unordered_map>
@@ -176,10 +183,108 @@ class SiriusLoadPolicy final : public dd::ExtensionCallback {
   }
 };
 
+// ---- S3 reads Sirius would refuse ----
+//
+// Sirius takes every plan its session allows (gpu_execution on), and when the GPU plan can't be built or fails, it
+// replays the statement on DuckDB's CPU engine, except when the plan reads s3://: then the statement fails ("S3 CPU
+// fallback is not supported"), whoever serves s3:// (plan_source_policy.cpp, sirius_context.cpp). Sirius scans only
+// its connectors' table functions; any other one that reads files on S3 (read_csv, read_json, a DuckLake or Delta
+// table's scan) always fails that way. Such a statement is run on the CPU from the start: gpu_execution is off for
+// it alone (the session's value, put back when the statement ends), so Sirius leaves the plan to DuckDB and httpfs
+// reads S3. GPU scans of S3 Parquet are not touched.
+
+// The table functions Sirius scans on the GPU (src/planner/connector_registry.cpp, build 1290c3ea84).
+bool SiriusScans(const std::string& function) {
+  static const std::unordered_set<std::string> kNames = {
+      "seq_scan", "parquet_scan", "read_parquet", "sirius_read_parquet", "iceberg_scan", "sirius_stream_source"};
+  return kNames.contains(Lower(function));
+}
+
+bool IsS3(const std::string& path) { return Lower(path.substr(0, 5)) == "s3://"; }
+
+// The plan reads S3 through a table function Sirius can't scan, as Sirius itself classifies it (a multi-file scan
+// whose bound file list names s3://).
+bool ReadsS3PastSirius(const dd::LogicalOperator& op) {
+  if (op.type == dd::LogicalOperatorType::LOGICAL_GET) {
+    const auto& get = op.Cast<dd::LogicalGet>();
+    if (!SiriusScans(get.function.GetName().GetIdentifierName())) {
+      if (const auto* files = dynamic_cast<const dd::MultiFileBindData*>(get.bind_data.get());
+          files && files->file_list) {
+        for (const auto& file : files->file_list->GetDisplayFileList(dd::optional_idx(64))) {
+          if (IsS3(file.path)) return true;
+        }
+      }
+    }
+  }
+  for (const auto& child : op.children) {
+    if (child && ReadsS3PastSirius(*child)) return true;
+  }
+  return false;
+}
+
+constexpr char kRouteStateName[] = "hardcharger_sirius_cpu_route";
+
+// The session's own gpu_execution while one statement runs with it off, put back when the statement's query ends.
+class SiriusCpuRoute final : public dd::ClientContextState {
+ public:
+  explicit SiriusCpuRoute(dd::idx_t setting) : setting_(setting) {}
+  void TurnOff(dd::ClientContext& context) {
+    auto& settings = context.config.user_settings;
+    if (!active_) {
+      had_ = settings.IsSet(setting_);
+      if (had_) {
+        settings.TryGetSetting(dd::DBConfig::GetConfig(context).user_settings, setting_, previous_);
+      }
+      active_ = true;
+    }
+    settings.SetUserSetting(setting_, dd::Value::BOOLEAN(false));
+  }
+  void QueryEnd(dd::ClientContext& context, dd::optional_ptr<dd::ErrorData>) override {
+    if (!active_) return;
+    auto& settings = context.config.user_settings;
+    if (had_) {
+      settings.SetUserSetting(setting_, previous_);
+    } else {
+      settings.ClearSetting(setting_);
+    }
+    active_ = false;
+  }
+
+ private:
+  const dd::idx_t setting_;
+  bool active_ = false;
+  bool had_ = false;
+  dd::Value previous_;
+};
+
+std::atomic<bool> route_logged = false;
+
+void RouteS3PastSirius(dd::OptimizerExtensionInput& input, dd::unique_ptr<dd::LogicalOperator>& plan) {
+  if (!plan) return;
+  auto& context = input.context;
+  dd::ExtensionOption option;
+  if (!dd::DBConfig::GetConfig(context).TryGetExtensionOption(dd::Identifier("gpu_execution"), option)) return;
+  dd::Value on;
+  if (!context.TryGetCurrentSetting("gpu_execution", on) || on.IsNull() || !on.GetValue<bool>()) return;
+  if (!ReadsS3PastSirius(*plan)) return;
+  auto state = context.registered_state->GetOrCreate<SiriusCpuRoute>(kRouteStateName, option.setting_index.GetIndex());
+  state->TurnOff(context);
+  if (!route_logged.exchange(true)) {
+    Log(LogLevel::kInfo,
+        "a statement reads S3 through a scan Sirius doesn't run on the GPU (read_csv, a DuckLake table, ...), which "
+        "Sirius would refuse to run on the CPU: such statements run on DuckDB's CPU engine (logged once)");
+  }
+}
+
 }  // namespace
 
 void InstallSiriusPolicy(dd::DatabaseInstance& database) {
-  dd::ExtensionCallback::Register(dd::DBConfig::GetConfig(database), dd::make_shared_ptr<SiriusLoadPolicy>());
+  auto& config = dd::DBConfig::GetConfig(database);
+  dd::ExtensionCallback::Register(config, dd::make_shared_ptr<SiriusLoadPolicy>());
+  // Before Sirius's own optimizer hooks, which register when it loads: they read gpu_execution after this one.
+  dd::OptimizerExtension route;
+  route.pre_optimize_function = RouteS3PastSirius;
+  dd::OptimizerExtension::Register(config, std::move(route));
   RemoveFrom(database);  // (an extension loaded before the server's own code ran)
 }
 

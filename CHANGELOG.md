@@ -16,7 +16,10 @@ own changelog in `python/CHANGELOG.md`.
     httpfs: `COPY ... TO 's3://...'`, every DuckLake or Iceberg write to S3, CPU reads of S3, and
     every S3 read on a server whose GPU is unusable failed. The server takes that file system out
     as soon as Sirius loads (in the startup SQL or later), so httpfs serves `s3://`; Sirius's GPU
-    scans of S3 Parquet still read with Sirius's own client (they never went through it).
+    scans of S3 Parquet still read with Sirius's own client (they never went through it). A
+    statement that reads S3 through a scan Sirius doesn't run on the GPU (`read_csv`, `read_json`,
+    a DuckLake table) runs on the CPU from the start: Sirius would otherwise fail it ("S3 CPU
+    fallback is not supported"), so a GPU cluster could not read a DuckLake catalog on S3 at all.
   - `gpu_execution('<sql>')` re-ran its SQL on a connection of its own, where no grant, row
     policy, mask or read-only session applied: a store user granted EXECUTE on it read rows a row
     policy hid and tables they had no SELECT on. It, and Sirius's other functions that run SQL or

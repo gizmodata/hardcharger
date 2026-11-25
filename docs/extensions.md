@@ -85,3 +85,32 @@ migration are separate from the metadata file's storage format. Use the compatib
 controls documented for your chosen upstream DuckLake version. Hardcharger does not
 promise that an older DuckDB can reopen the metadata after newer-server writes.
 PostgreSQL metadata does not have a DuckDB file storage version.
+
+## NVIDIA Sirius (GPU execution)
+
+[Sirius](https://duckdb.org/docs/2.0/core_extensions/sirius) runs DuckDB plans on an NVIDIA GPU
+(`LOAD sirius`, usually in the startup SQL). The server changes four things when it loads:
+
+- **S3 stays DuckDB's.** Sirius registers a file system for every `s3://` path that is read-only and
+  serves only its GPU scans, ahead of httpfs. The server takes it out as soon as Sirius loads, so
+  httpfs serves `s3://`: `COPY ... TO 's3://...'`, DuckLake and Iceberg writes to S3, and every CPU
+  read of S3 work as without Sirius. GPU scans of S3 Parquet read with Sirius's own client, as
+  before. Sirius reads S3 only with a static `TYPE s3` (`PROVIDER config`) or `TYPE sirius_s3`
+  secret. Sirius never replays a statement that reads S3 on the CPU: a statement that reads S3
+  through a scan Sirius doesn't run on the GPU (`read_csv`, `read_json`, a DuckLake table's scan)
+  runs on the CPU from the start, with `gpu_execution` off for that statement only; a GPU plan
+  over S3 Parquet that fails at run time still fails (Sirius's rule).
+- **Functions that run SQL or take a table by name are the administrator's.** `gpu_execution('<sql>')`
+  runs its SQL on a connection of its own, where access control doesn't apply; `pin_table`,
+  `unpin_table`, `sirius_knn_search` and the ANN-index functions take a table by name;
+  `sirius_stream_source`, `reset_sirius_cache` and the profiler act on the whole server. Under
+  access control they are refused to every store user, and `GRANT EXECUTE` on them is refused. A
+  store user's queries run on the GPU without them, under every grant, row policy and mask.
+- **`sirius_read_parquet()`** (Sirius's internal rewrite of `read_parquet('s3://...')`) reads with
+  its own I/O, past the server's file checks: it takes one `s3://` literal only, for everyone.
+- **Settings.** Every Sirius setting (`gpu_execution`, `enable_duckdb_fallback`, `spill_compression`,
+  ...) needs MANAGE CONFIG in any scope, as `SET GLOBAL` does: several act on the whole server
+  whatever the scope. `sirius_log_backend`, `sirius_log_dir`, `sirius_log_level`,
+  `pin_table_input_compression_plan_dir` and the `sirius_exchange_*` settings make Sirius open files
+  or network connections of its own: set them in the startup SQL (or Sirius's environment and
+  `sirius.yaml`); after startup they are refused to everyone, the administrator included.
