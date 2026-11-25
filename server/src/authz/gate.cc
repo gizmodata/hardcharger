@@ -48,6 +48,7 @@
 #include <unordered_set>
 
 #include "authz/duckdb_internal.hpp"
+#include "authz/sirius.hpp"
 #include "authz/types.hpp"
 
 namespace hardcharger::authz {
@@ -647,8 +648,8 @@ class Walker {
     if (violation) return;
     if (!scopes_.empty() && (name == "query" || name == "query_table")) {
       MacroQuery(call, name);
-    } else if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" ||
-        name == "query_table") {
+    } else if (AlwaysGated(name) || IsRemoteQueryFunction(name) || name == "query" || name == "query_table" ||
+               IsSiriusAdministratorOnlyFunction(name)) {
       Flag(name + "()");
     } else if (ducklake_call_ && ducklake_call_(CallOf(ref.function->Cast<dd::FunctionExpression>(), wrapper_))) {
       // A DuckLake call, checked against the catalog_access rules by the callback.
@@ -870,8 +871,10 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
       auto& set = statement.Cast<dd::SetStatement>();
       const std::string name = Lower(Str(set.name));
       const std::string verb = set.set_type == dd::SetType::RESET ? "RESET GLOBAL " : "SET GLOBAL ";
-      if (set.scope == dd::SetScope::GLOBAL ||
-          (set.scope == dd::SetScope::AUTOMATIC && IsInstanceSetting(name))) {
+      // Sirius's settings act on the whole server whatever the scope they are set in (some are
+      // static in Sirius, authz/sirius.hpp): SET SESSION of one too.
+      if (set.scope == dd::SetScope::GLOBAL || (set.scope == dd::SetScope::AUTOMATIC && IsInstanceSetting(name)) ||
+          (set.scope != dd::SetScope::VARIABLE && IsSiriusSetting(name))) {
         return gate(verb + Str(set.name));
       }
       if (set.set_type != dd::SetType::RESET && IsGrammarSetting(name)) {
@@ -893,8 +896,8 @@ std::optional<std::string> Classify(dd::SQLStatement& statement,
         const std::string name =
             Lower(Str(call.function->Cast<dd::FunctionExpression>().FunctionName()));
         if (name == "checkpoint" || name == "force_checkpoint") return gate("CHECKPOINT");
-        if (IsRemoteQueryFunction(name) || AlwaysGated(name) || name == "query" ||
-            name == "query_table") {
+        if (IsRemoteQueryFunction(name) || AlwaysGated(name) || name == "query" || name == "query_table" ||
+            IsSiriusAdministratorOnlyFunction(name)) {
           return gate(name + "()");
         }
         // CALL f(...) binds f as SELECT * FROM f(...) does: its arguments are evaluated, and a

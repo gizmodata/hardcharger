@@ -34,6 +34,8 @@
 #include <string_view>
 #include <vector>
 
+#include "authz/sirius.hpp"
+
 namespace hardcharger {
 
 namespace dd = duckdb;
@@ -293,10 +295,22 @@ dd::ParserOverrideResult GuardParse(dd::ParserExtensionInfo* info, const dd::str
   // only which words are keywords, which the counts here do not depend on; sql_lex.hpp).
   const std::string refusal = ShapeRefusal(Measure(query, DefaultTokenizer()), state.nesting_limit, state.joined_limit);
   if (!refusal.empty()) throw dd::ParserException(refusal);
+  // Sirius's sirius_read_parquet() reads with its own I/O, past the file system's guard: only
+  // the form its own rewrite of read_parquet('s3://...') produces parses (authz/sirius.hpp).
+  // Here, where every text DuckDB parses passes: gpu_execution()'s and query()'s too.
+  if (auto sirius = authz::SiriusReadParquetRefusal(query)) throw dd::PermissionException(*sirius);
   return dd::ParserOverrideResult();  // not claimed: DuckDB's own parser parses it
 }
 
 void Refuse(const dd::Identifier& name, const ParseGuard::State& state, const dd::Value* value, dd::SetScope scope) {
+  // Sirius's settings that reach the host (a directory it writes or reads with its own I/O, its
+  // process-wide log sink, the exchange's listener and peers): the startup SQL's, for everyone.
+  if (authz::IsSiriusStartupOnlySetting(name.GetIdentifierName())) {
+    throw dd::PermissionException(
+        "%s can be set only in the server's startup SQL (init_sql_commands): it makes Sirius open files or network "
+        "connections of its own, past the server's checks, for the whole server",
+        name.GetIdentifierName());
+  }
   const auto option = dd::DBConfig::GetOptionByName(name);
   if (!option) return;
   const std::string_view canonical = option->name;

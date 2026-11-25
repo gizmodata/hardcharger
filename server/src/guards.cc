@@ -7,10 +7,11 @@
 #include <filesystem>
 #include <set>
 
-#include "duckdb_sql.hpp"
-#include "duckdb_read_only.hpp"
-#include "platform.hpp"
+#include "authz/sirius.hpp"
 #include "chargewire/errors.hpp"
+#include "duckdb_read_only.hpp"
+#include "duckdb_sql.hpp"
+#include "platform.hpp"
 
 #ifndef _WIN32
 #include <sys/stat.h>
@@ -304,6 +305,8 @@ std::optional<std::string> GatedFunction(const Piece& piece) {
     const std::string name = t[i].Value();
     if (name == "duckdb_secrets") return "duckdb_secrets()";
     if (name.starts_with("quack_")) return name + "()";
+    // Sirius's that run SQL on a connection of their own or name tables by string.
+    if (authz::IsSiriusAdministratorOnlyFunction(name)) return name + "()";
     if (name == "checkpoint" || name == "force_checkpoint") return "CHECKPOINT";
     if (name == "import_database") return "IMPORT DATABASE";
     if (!FileReadingFunctions().contains(name)) continue;
@@ -868,7 +871,8 @@ std::optional<std::string> ClassifyGatedCommand(duckdb_v2_connection_handle conn
     }
   }
   if (auto set = SetOf(piece)) {
-    if (set->global || (set->automatic && IsInstanceSetting(set->name))) {
+    // (Sirius's act on the whole server whatever the scope: authz/sirius.hpp.)
+    if (set->global || (set->automatic && IsInstanceSetting(set->name)) || authz::IsSiriusSetting(set->name)) {
       return std::string(set->reset ? "RESET GLOBAL " : "SET GLOBAL ") + set->name;
     }
   }

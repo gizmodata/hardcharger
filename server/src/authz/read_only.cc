@@ -31,6 +31,7 @@
 
 #include "authz/authz.hpp"
 #include "authz/duckdb_internal.hpp"
+#include "authz/sirius.hpp"
 
 namespace hardcharger::authz {
 
@@ -147,7 +148,8 @@ bool IsGuardedSetting(const std::string& name) {
       // Files DuckDB writes, and the profiling the server sets up for instrumentation.
       "enable_profiling", "profiling_output", "profile_output", "profiling_mode", "custom_profiling_settings",
       "log_query_path", "enable_http_logging", "http_logging_output", "enable_logging", "logging_storage"};
-  return kNames.contains(name);
+  // And every Sirius setting: they act on the whole server in any scope (authz/sirius.hpp).
+  return kNames.contains(name) || IsSiriusSetting(name);
 }
 
 // Whether a plain SET / RESET (no GLOBAL or SESSION) of `name` stays in the session.

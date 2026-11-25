@@ -68,12 +68,13 @@
 #include "authz/ducklake_calls.hpp"
 #include "authz/macros.hpp"
 #include "authz/name_scope.hpp"
-#include "logging.hpp"
 #include "authz/policies.hpp"
 #include "authz/resolver.hpp"
+#include "authz/sirius.hpp"
 #include "authz/storage_access.hpp"
 #include "authz/triggers.hpp"
 #include "authz/views.hpp"
+#include "logging.hpp"
 
 namespace hardcharger::authz {
 
@@ -158,7 +159,7 @@ std::optional<std::string> UngrantableTableFunction(const std::string& name_lowe
            "READ HTTP, or ON LOCATION), not EXECUTE";
   }
   if (name_lower.starts_with("hardcharger_") || name_lower.starts_with("chargewire_") ||
-      AdministratorOnlyTableFunctions().count(name_lower)) {
+      AdministratorOnlyTableFunctions().count(name_lower) || IsSiriusAdministratorOnlyFunction(name_lower)) {
     return "table function " + name_lower +
            " stays the administrator's: it runs SQL of its own, reaches memory or the engine's internals, or "
            "shows other sessions' data";
@@ -688,6 +689,10 @@ class PlanChecker {
         if (ChangesWholeServer(context_, set.name, set.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "SET GLOBAL");
         }
+        // Sirius's settings act on the whole server in any scope (authz/sirius.hpp).
+        if (set.scope != dd::SetScope::VARIABLE && IsSiriusSetting(compat::Str(set.name))) {
+          RequireSystem(SystemPrivilege::kManageConfig, "SET " + compat::Str(set.name) + " (a Sirius setting)");
+        }
         // Session settings that make DuckDB write files wherever they point (every
         // statement's text, or its profile): writing files, as COPY TO is.
         if (WritesFiles(Lower(compat::Str(set.name)))) {
@@ -717,6 +722,9 @@ class PlanChecker {
         if (reset.scope != dd::SetScope::VARIABLE &&
             ChangesWholeServer(context_, reset.name, reset.scope)) {
           RequireSystem(SystemPrivilege::kManageConfig, "RESET GLOBAL");
+        }
+        if (reset.scope != dd::SetScope::VARIABLE && IsSiriusSetting(compat::Str(reset.name))) {
+          RequireSystem(SystemPrivilege::kManageConfig, "RESET " + compat::Str(reset.name) + " (a Sirius setting)");
         }
         VisitChildren(op, nullptr);
         return;
@@ -984,6 +992,14 @@ class PlanChecker {
       // catalog around its rules. Any other function needs EXECUTE on it (granted to
       // a role; a catalog_access principal holds no grants), and the call's path
       // arguments, as the grant declared them, go through the storage privileges.
+      // Sirius's that run SQL on a connection of their own or name tables by string: no
+      // grant opens them (one made before they became ungrantable included).
+      if (IsSiriusAdministratorOnlyFunction(name)) {
+        Deny(principal_, "the table function " + name +
+                             " stays the administrator's under access control: it runs SQL on a connection of its "
+                             "own, or reads or changes a table it is handed by name, past every grant, row policy "
+                             "and mask");
+      }
       if (!AllowedTableFunctions().count(name)) {
         const auto declared = snapshot_.TableFunctionPathArguments(principal_, name);
         if (!declared) {

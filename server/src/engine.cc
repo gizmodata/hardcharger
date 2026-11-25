@@ -15,16 +15,17 @@
 #include <sstream>
 
 #include "auth.hpp"
-#include "duckdb_sql.hpp"
+#include "authz/sirius.hpp"
+#include "chargewire/server.hpp"
 #include "duckdb_read_only.hpp"
+#include "duckdb_sql.hpp"
 #include "instrumentation.hpp"
 #include "logging.hpp"
-#include "redact.hpp"
 #include "platform.hpp"
+#include "redact.hpp"
 #include "settings.hpp"
 #include "sql_functions.hpp"
 #include "version.hpp"
-#include "chargewire/server.hpp"
 
 namespace hardcharger {
 
@@ -653,6 +654,10 @@ Backend::Backend(Runtime& runtime, std::shared_ptr<authz::AccessControl> access)
   // startup is over (below), a sensitive path.
   if (access_) private_files_->Add(access_->store_file(), "the access-control store", /*attached=*/false);
   authz::InstallFileGuard(instance(), private_files_, sensitive_paths_);
+  // NVIDIA's Sirius, whenever it loads (the init SQL's LOAD, or a later one): its read-only,
+  // GPU-only s3:// file system leaves DuckDB's (httpfs serves S3), and the settings it adds are
+  // recorded as its own (authz/sirius.hpp).
+  authz::InstallSiriusPolicy(instance());
   // The baseline build on a CPU too old for DuckDB's downloadable extensions: only the
   // built-in ones load (issue #62).
 #ifdef HARDCHARGER_BUILT_IN_EXTENSIONS

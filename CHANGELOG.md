@@ -7,6 +7,35 @@ own changelog in `python/CHANGELOG.md`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **NVIDIA's Sirius extension (`LOAD sirius`, GPU execution) is safe to load on a server with access
+  control, and S3 works with it.**
+  - S3 writes and CPU reads of S3 work with Sirius loaded. Sirius registers its own file system
+    for every `s3://` path, which is read-only and serves only GPU scans, and DuckDB picks it over
+    httpfs: `COPY ... TO 's3://...'`, every DuckLake or Iceberg write to S3, CPU reads of S3, and
+    every S3 read on a server whose GPU is unusable failed. The server takes that file system out
+    as soon as Sirius loads (in the startup SQL or later), so httpfs serves `s3://`; Sirius's GPU
+    scans of S3 Parquet still read with Sirius's own client (they never went through it).
+  - `gpu_execution('<sql>')` re-ran its SQL on a connection of its own, where no grant, row
+    policy, mask or read-only session applied: a store user granted EXECUTE on it read rows a row
+    policy hid and tables they had no SELECT on. It, and Sirius's other functions that run SQL or
+    take a table by name (`sirius_stream_source`, `pin_table`, `unpin_table`, `sirius_knn_search`,
+    `sirius_create_ann_index`, `sirius_drop_ann_index`, `reset_sirius_cache`, `profiler_start`,
+    `profiler_stop`), are the administrator's only: refused before DuckDB binds them, and no
+    `GRANT EXECUTE` opens them (a grant made before this release no longer counts). Queries run on
+    the GPU without them (Sirius's transparent execution), under every check.
+  - `sirius_read_parquet()` (Sirius's internal target for `read_parquet('s3://...')`) read files
+    with Sirius's own I/O, past the server's file checks: it now takes one `s3://` literal only, for
+    everyone, wherever DuckDB parses SQL (`query()`'s text included).
+  - Sirius's settings were open to every signed-in user, and several act on the whole server in any
+    scope (its log backend, directory and level) or reach the host (its log and compression-plan
+    directories, which it opens with its own I/O, and the exchange settings, which open a listener on
+    every interface and dial peers). Every Sirius setting now needs MANAGE CONFIG, in any scope
+    (read-only sessions refuse them all); the log backend, directory and level, the compression-plan
+    directory and the exchange settings can be set only in the startup SQL, by everyone, the
+    administrator included.
+
 ## [2.14.0] - 2026-11-22
 
 ### Highlights
