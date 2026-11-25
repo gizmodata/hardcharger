@@ -1,4 +1,4 @@
-# Google Play graphics — Hardcharger 2.11.0
+# Google Play graphics — Hardcharger 2.14.0
 
 Ready-to-upload English graphics, prepared locally. Nothing in this directory has been
 uploaded to Play Console. `preview.png` / `preview.html` show the complete collection;
@@ -24,10 +24,11 @@ mascot and square background; Google Play applies its own corner mask.
 
 ## Capture provenance
 
-- App package: `com.gizmodata.hardcharger`, version **2.11.0 (1501)**, Play distribution.
-- Source AAB: `Hardcharger-2.11.0-play-arm64-x86_64-build1501.aab`.
-- AAB SHA-256: `dd024023553094b8814613fa54daf381c80cec2a8fd623cd105192c0612737f8`.
-- Candidate source commit: `7f7c9140c53b65a666c0d238d4ce8a72ddf42ff1`.
+- App package: `com.gizmodata.hardcharger`, version **2.14.0 (41201)**, Play distribution.
+- Source AAB: `Hardcharger-android.aab` from the v2.14.0 GitHub Release (with
+  `android-candidate.json`), built by server run 45028262746.
+- AAB SHA-256: `72c0bcdfe7ee3fb0d1d39d0b5f1bb65582b202364f3694078a2911beda8e35b0`.
+- Candidate source commit: `d27832ee19874e76fbc7ddbda3ba8c782c1dacac` (tag `v2.14.0`).
 - Installed using bundletool 1.18.3 `build-apks --mode=universal`. The installation APK
   was signed with the local Android debug key; the application code is the release
   Play variant from the signed AAB. These are emulator captures, not Play-delivered
@@ -55,6 +56,10 @@ to avoid stale duplicate system icons on the emulator. Hide the keyboard and wai
 query results before capturing. Capture the actual display using
 `adb -s <capture-serial> exec-out screencap -p`.
 Never clear, resize, reinstall, or change settings on the owner's working emulator.
+With the on-screen keyboard enabled, `adb shell input text` drops and reorders characters, and
+a long statement typed that way can stall the console. On the capture AVD, disable every input
+method first (`adb shell ime disable <id>` for each line of `adb shell ime list -s`), type in
+chunks of a couple of dozen characters, and seed the data in several short statements.
 
 From the repository root, with UI dependencies and Playwright Chromium installed:
 

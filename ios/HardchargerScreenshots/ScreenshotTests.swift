@@ -56,7 +56,6 @@ final class ScreenshotTests: XCTestCase {
         input.typeText("CALL dbgen(sf => 0.01);\n")
         XCTAssertTrue(app.consoleOutput(containing: "OK")
             .waitForExistence(timeout: 60))
-        input.typeText(".tables\n")
         input.typeText("SELECT l_returnflag AS flag, l_linestatus AS status,\n")
         input.typeText("  count(*) AS items, round(sum(l_extendedprice), 2) AS revenue\n")
         input.typeText("FROM lineitem GROUP BY ALL ORDER BY ALL;\n")
@@ -70,7 +69,21 @@ final class ScreenshotTests: XCTestCase {
         let web = app.webViews.firstMatch
         let editor = web.textViews["SQL editor"]
         XCTAssertTrue(editor.waitForExistence(timeout: 30))
-        // The web UI as it opens (on a phone, Run would bring up the keyboard).
+        // The phone's "easier on a larger screen" note, hidden; then the console's query, run.
+        let note = web.buttons["Hide this note"]
+        if note.waitForExistence(timeout: 3) { note.tap() }
+        if !isPad { web.buttons["Hide the side panel"].firstMatch.tap() }
+        web.buttons["New tab"].firstMatch.tap()  // an empty editor
+        let fresh = web.textViews.matching(identifier: "SQL editor").element(boundBy: 0)
+        XCTAssertTrue(fresh.waitForExistence(timeout: 10))
+        fresh.tap()
+        fresh.typeText("SELECT l_returnflag AS flag, l_linestatus AS status, count(*) AS items, "
+            + "round(sum(l_extendedprice), 2) AS revenue FROM lineitem GROUP BY ALL ORDER BY ALL;")
+        let done = app.toolbars.buttons["Done"].firstMatch
+        if done.exists { done.tap() }
+        web.buttons.matching(NSPredicate(format: "label == 'Run'")).firstMatch.tap()
+        XCTAssertTrue(web.staticTexts.containing(NSPredicate(format: "label BEGINSWITH '4 rows'"))
+            .firstMatch.waitForExistence(timeout: 30))
         Thread.sleep(forTimeInterval: 1.5)
         try shot("webui")
 
@@ -78,15 +91,15 @@ final class ScreenshotTests: XCTestCase {
         XCTAssertTrue(app.buttons["server.stop"].firstMatch.waitForExistence(timeout: 30))
         try shot("server")
 
-        if isPad {
-            open("Logs")
-        } else {
+        // On an iPad, Logs is in the tab bar's "More" section, which the floating tab bar collapses
+        // (iPadOS 26), so it has no button to tap: the iPad set goes without it.
+        if !isPad {
             let logs = app.buttons["server.logs"].firstMatch
             for _ in 0..<6 where !logs.isHittable { app.swipeUp() }
             logs.tap()
+            Thread.sleep(forTimeInterval: 1.5)
+            try shot("logs")
         }
-        Thread.sleep(forTimeInterval: 1.5)
-        try shot("logs")
 
         open("Settings")
         XCTAssertTrue(app.switches["settings.printQueries"].waitForExistence(timeout: 10))

@@ -1,6 +1,6 @@
 # Additional capture observations
 
-The store images show Play build 1501.
+The store images show Play build 41201 (2.14.0). The notes below are from the 2.11.0 capture (build 1501).
 
 ## Compact-landscape navigation — fixed locally
 

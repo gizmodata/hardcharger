@@ -212,7 +212,7 @@ The UI's source is in [`ui/`](ui/README.md), built and tested with the server in
   <img src="docs/assets/ios-iphone-splash-dark.png" alt="The splash screen, dark: the charging bull and the Hardcharger lettering, by GizmoData" width="24%">
 </p>
 <p align="center">
-  <img src="docs/assets/ios-ipad-webui-light.png" alt="The Hardcharger app on iPad: the sidebar and the server's own web UI, signed in" width="80%">
+  <img src="docs/assets/ios-ipad-webui-light.png" alt="The Hardcharger app on iPad: the server's own web UI, signed in, with the schema browser and a TPC-H query's results" width="80%">
 </p>
 
 The whole server runs on the iPhone or iPad itself: the same `hardcharger-server`, Hardcharger
@@ -232,6 +232,16 @@ Get it on the [App Store](https://apps.apple.com/us/app/hardcharger/id6824900180
 [`ios/`](ios/README.md).
 
 ## 🤖 Android app
+
+<p align="center">
+  <img src="docs/assets/android-phone-workspace-light.png" alt="The Hardcharger app on an Android phone: the web UI's SQL workspace with sales totals by region" width="24%">
+  <img src="docs/assets/android-phone-server-light.png" alt="The server running on the phone, with its port, uptime, address and buttons" width="24%">
+  <img src="docs/assets/android-phone-console-dark.png" alt="The native SQL console, dark: a query and its boxed result table" width="24%">
+  <img src="docs/assets/android-phone-about-light.png" alt="About Hardcharger: the charging bull and the bundled versions of the app, server, DuckDB, Chargewire and web UI" width="24%">
+</p>
+<p align="center">
+  <img src="docs/assets/android-tablet-workspace-light.png" alt="The Hardcharger app on an Android tablet: the navigation rail, the schema browser and a query's results" width="80%">
+</p>
 
 The same server runs on Android phones and tablets (Android 9 or later), with its web UI, the
 `hardcharger` console, files from the document picker and the share sheet, and passwords kept in

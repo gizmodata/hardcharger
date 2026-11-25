@@ -37,8 +37,8 @@ for file in paths:
     assets.append({'file': str(file.relative_to(root)), 'width': w, 'height': h,
                    'format': 'RGBA PNG' if icon else 'RGB PNG', 'bytes': len(data),
                    'sha256': hashlib.sha256(data).hexdigest()})
-manifest = {'app': 'com.gizmodata.hardcharger', 'version': '2.11.0', 'version_code': 1501,
-            'distribution': 'play', 'aab_sha256': 'dd024023553094b8814613fa54daf381c80cec2a8fd623cd105192c0612737f8',
+manifest = {'app': 'com.gizmodata.hardcharger', 'version': '2.14.0', 'version_code': 41201,
+            'distribution': 'play', 'aab_sha256': '72c0bcdfe7ee3fb0d1d39d0b5f1bb65582b202364f3694078a2911beda8e35b0',
             'assets': assets}
 (root / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
 print(f'Validated {len(assets)} upload assets: dimensions, 8-bit PNG encoding, CRCs, decompression, and file-size limits.')

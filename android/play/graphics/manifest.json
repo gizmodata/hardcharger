@@ -1,9 +1,9 @@
 {
   "app": "com.gizmodata.hardcharger",
-  "version": "2.11.0",
-  "version_code": 1501,
+  "version": "2.14.0",
+  "version_code": 41201,
   "distribution": "play",
-  "aab_sha256": "dd024023553094b8814613fa54daf381c80cec2a8fd623cd105192c0612737f8",
+  "aab_sha256": "72c0bcdfe7ee3fb0d1d39d0b5f1bb65582b202364f3694078a2911beda8e35b0",
   "assets": [
     {
       "file": "app-icon.png",
@@ -18,32 +18,32 @@
       "width": 1024,
       "height": 500,
       "format": "RGB PNG",
-      "bytes": 234149,
-      "sha256": "26d84f631c609dbca3c7ea547465042e6d25aa0bc809e9547fd5dc28702f1b1d"
+      "bytes": 233779,
+      "sha256": "f3ed7bbd2ec73fd5dbbeaf4e74fec8788c8b036ea0d7233c9914758f8f059ac6"
     },
     {
       "file": "phone/01-sql-workspace.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 157501,
-      "sha256": "f8bac355d4a749cca597bdc65b42b7df1601f1721b33526349ae6be2b31b472c"
+      "bytes": 165952,
+      "sha256": "05abbb8233812873fe5b43d916d42ddd9e3bddfb31271726ccc2de078f4f6618"
     },
     {
       "file": "phone/02-local-server.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 129187,
-      "sha256": "d6b1f332ee6594d74515d9d833f66ae5657c351001c5755a69245cf49e048a80"
+      "bytes": 128910,
+      "sha256": "dd20c50893334a4f6c26512bf7630dfbb06831a19eff9a5aa61bd8f86d3146a7"
     },
     {
       "file": "phone/03-native-console-dark.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 86051,
-      "sha256": "a0ef73229ac61b5a2ebbf5c1f367582ddfed94f123e5e729f4ed97390c86ba22"
+      "bytes": 85697,
+      "sha256": "94abcb20abbda455afeaa6af670e706ce67614a4f0a37544e875b4525b0e8891"
     },
     {
       "file": "phone/04-settings.png",
@@ -58,88 +58,88 @@
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 341178,
-      "sha256": "875e4ab4537ac9aafab65e9e32bcd0f37c9fd09f0fa8c489635a0bf420b34282"
+      "bytes": 341960,
+      "sha256": "79d3943720758d95e5010910214daca7ada344f23a81240618a3898ad42be33a"
     },
     {
       "file": "tablet-7-inch/01-sql-workspace.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 112353,
-      "sha256": "9d389a709ced868fa40198ec3457d2d1a0a1ce973a1c95e795c93f7ca747ddd5"
+      "bytes": 116274,
+      "sha256": "8cd54d399c74b06170d1bdad1e7cae1ff40b2517e199e05ce2c664b77b703986"
     },
     {
       "file": "tablet-7-inch/02-local-server.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 132126,
-      "sha256": "14ffd01c20fc4c74d6d723d5ee295e4dba0099b0eac59c4ebca6299b33156ef9"
+      "bytes": 132094,
+      "sha256": "dfadd6f2981e22b49c06624386ad8309c2ee63ba9e017b59119855d7b4395c77"
     },
     {
       "file": "tablet-7-inch/03-native-console-dark.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 55892,
-      "sha256": "877fe6d770c0663e5b646d880ab2cbe460e71a4b6d61d301a85c4f179a058178"
+      "bytes": 54615,
+      "sha256": "279f1ef12d298a55302f3bc7614f02f0018fe1700fc47b80ed869129069417bb"
     },
     {
       "file": "tablet-7-inch/04-settings.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 95052,
-      "sha256": "4049be9e0030645eaa13ae71c7c55dbeee99700017178b7650b74c3d26bf5e38"
+      "bytes": 95290,
+      "sha256": "2485922b41f5d01bd63dffa7f1a24dcaefd56c7bbe4774d8b45c26bca68bb997"
     },
     {
       "file": "tablet-7-inch/05-about.png",
       "width": 1080,
       "height": 1920,
       "format": "RGB PNG",
-      "bytes": 204015,
-      "sha256": "32567050591d1b9877ccb34295d10bd1764bf0d3fb9a89cf380bfae415a44811"
+      "bytes": 205228,
+      "sha256": "1483d92aa26757e9642d70f6363e6592d086cac2ccc699b95c2eeb6ec8d80e52"
     },
     {
       "file": "tablet-10-inch/01-sql-workspace.png",
       "width": 1920,
       "height": 1080,
       "format": "RGB PNG",
-      "bytes": 150128,
-      "sha256": "87da35137eb7fc29aad27b382a8bc6cb4ea68ad69f24cff149f8c6e92d737a66"
+      "bytes": 154179,
+      "sha256": "6e6e0c5a35300e4165639e6fabeaf332a22ed69775cecf4fcfde37f8fdaa6853"
     },
     {
       "file": "tablet-10-inch/02-local-server.png",
       "width": 1920,
       "height": 1080,
       "format": "RGB PNG",
-      "bytes": 87969,
-      "sha256": "6ddeec52a408827d8b4fc58bdeea4fc74a5b45700fc64c3dc6a319b6892eefe0"
+      "bytes": 87841,
+      "sha256": "5ff8c50099822286aa7fba0f13ce4ad2e847654249952be8d948a9fd7cd40b0e"
     },
     {
       "file": "tablet-10-inch/03-native-console-dark.png",
       "width": 1920,
       "height": 1080,
       "format": "RGB PNG",
-      "bytes": 58551,
-      "sha256": "708543b2a1cf264fe8f6fc27114897dcc1fbbd110387e0b98ae0c7f8b8bd4b06"
+      "bytes": 58869,
+      "sha256": "7fa363fc1980e88f8bc47ecea5d7e4037404d6a179bcf483d0641c1f9c2e292a"
     },
     {
       "file": "tablet-10-inch/04-settings.png",
       "width": 1920,
       "height": 1080,
       "format": "RGB PNG",
-      "bytes": 77999,
-      "sha256": "0f722e17b53868c3c9f707fbbaa5991b5c0ce7da2530885365f7401304c1440b"
+      "bytes": 78135,
+      "sha256": "0de698fbc61d5bd13d4b62eb7333c915b00c690ec352cbbeb885901ebe327797"
     },
     {
       "file": "tablet-10-inch/05-about.png",
       "width": 1920,
       "height": 1080,
       "format": "RGB PNG",
-      "bytes": 167074,
-      "sha256": "6734ee3693ef3643db5b7c00f6d78cc8bec2defcb08b8ee450df0c7a46e9fbc3"
+      "bytes": 167865,
+      "sha256": "e442bc6503e38e6fd8035c10ae968a7c909f7e7fb4e18090405693fbd4a6696c"
     }
   ]
 }
