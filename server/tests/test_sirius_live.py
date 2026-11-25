@@ -109,7 +109,7 @@ def test_pinned_tables_keep_row_policies(world):
         n = expect_allowed(client=user, sql=f"SELECT count(*) AS n FROM {t}").column("n").to_pylist()
         assert n == [1000], n
     finally:
-        expect_allowed(client=admin, sql=f"CALL unpin_table(format = 'duckdb', name = '{t}')")
+        expect_allowed(client=admin, sql=f"CALL unpin_table('{t}')")
 
 
 def test_sirius_settings(world):
